@@ -1,0 +1,13 @@
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 12px; text-decoration: none; border: 1px solid transparent; border-radius: 8px; min-height: 42px; padding: 9px 15px; font-size: 12px; font-weight: 550; white-space: nowrap; }
+.button.primary { background: #c9f28c; color: #20281a; }
+.button.primary:hover:not(:disabled) { background: #dbffab; }
+.button.secondary { background: #23272b; border-color: #3a4147; color: #c6cbd0; }
+.button.ghost { background: transparent; border-color: #3a4147; color: #929ca5; }
+.text-button { background: transparent; border: 0; padding: 2px 0; font-size: 10px; color: #abbf92; }
+.text-button:hover:not(:disabled) { color: #d4f3b1; }
+.segmented { display: flex; background: #1a1e21dc; padding: 4px; border: 1px solid #42494c; border-radius: 9px; }
+.segmented button { border: 0; background: transparent; color: #939da0; padding: 6px 13px; border-radius: 5px; font-size: 10px; }
+.segmented button.active { background: #3a4336; color: #deefce; }
+.icon-button { background: #1a1e21dc; color: #b9c7ae; font-size: 21px; width: 37px; border-radius: 9px; border: 1px solid #42494c; }
+.icon-button[aria-pressed=true] { background: #3a4336; border-color: #abc98a; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

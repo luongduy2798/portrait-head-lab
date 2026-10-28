@@ -1,0 +1,23 @@
+{
+  "name": "portrait-head-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host localhost",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host localhost",
+    "assets": "node scripts/prepare-assets.mjs",
+    "assets:template": "node scripts/generate-template.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.35",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "0.186.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  },
+  "engines": { "node": ">=22.12.0" }
+}
