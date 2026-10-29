@@ -36,10 +36,11 @@ self.onmessage = async ({ data }) => {
     emit('Đang tách tóc và vùng da…', 0.34);
     const segmentStarted = performance.now();
     const segmentation = segmenter.segment(bitmap);
-    let skin, hair, accessories, maskWidth, maskHeight;
+    let skin, bodySkin, hair, accessories, maskWidth, maskHeight;
     try {
       const masks = segmentation.confidenceMasks;
       if (!masks || masks.length !== 6) throw new Error('Không đọc được mask tóc/da. Hãy tải lại bộ model.');
+      bodySkin = masks[2].getAsFloat32Array().slice();
       skin = masks[3].getAsFloat32Array().slice();
       hair = masks[1].getAsFloat32Array().slice();
       accessories = masks[5].getAsFloat32Array().slice();
@@ -47,7 +48,7 @@ self.onmessage = async ({ data }) => {
     } finally { segmentation.close(); }
     timings.segment = performance.now() - segmentStarted;
     const blendshapes = Object.fromEntries((result.faceBlendshapes[0]?.categories ?? []).map(({ categoryName, score }) => [categoryName, score]));
-    self.postMessage({ type: 'result', analysis: { landmarks, blendshapes, skin, hair, accessories, maskWidth, maskHeight, timings } }, [skin.buffer, hair.buffer, accessories.buffer]);
+    self.postMessage({ type: 'result', analysis: { landmarks, blendshapes, skin, bodySkin, hair, accessories, maskWidth, maskHeight, timings } }, [skin.buffer, bodySkin.buffer, hair.buffer, accessories.buffer]);
   } catch (error) {
     self.postMessage({ type: 'error', message: error instanceof Error ? error.message : 'Không thể phân tích ảnh.' });
   } finally { bitmap.close(); }

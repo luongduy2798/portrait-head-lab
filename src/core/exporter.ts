@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { disposeObject } from './mesh';
+import { expressionControls, updateExpressionBounds } from './expressions';
 
 export async function exportHead(object: THREE.Object3D) {
   // Export identity/style geometry, expression targets and the active weights.
@@ -49,6 +50,7 @@ export async function inspectGLB(data: ArrayBuffer, expected?: THREE.Object3D) {
   const box = new THREE.Box3().setFromObject(imported.scene, true);
   imported.scene.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
+    if (expressionControls.every(([name]) => child.morphTargetDictionary?.[name] !== undefined)) updateExpressionBounds(child.geometry);
     meshCount++; vertexCount += child.geometry.getAttribute('position').count;
     for (const material of Array.isArray(child.material) ? child.material : [child.material]) if ((material as THREE.MeshStandardMaterial).map) textured++;
   });

@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { clamp, deformPoint, styledParams } from './shape';
 import type { EarTemplate } from './ears';
-import { expressionControls, expressionPositions, type ExpressionName } from './expressions';
+import { expressionControls, expressionIntensityMultiplier, expressionSet, retargetExpressionDeltas, updateExpressionBounds } from './expressions';
+import type { ExpressionRigAsset } from './expression-rig';
+import { addOralCavity } from './oral-cavity';
 import { lowerLipRim, mouthSurfaceTriangles, upperLipRim } from './mouth';
 import { createSkinField, type SkinColorField } from './skin';
-import { smoothHeadSurface, type HeadSurface } from './subdivision';
+import { smoothHeadSurface, smoothHeadSurfaceFields, type HeadSurface } from './subdivision';
 import type { HeadPart, HeadResult, HeadTemplate, Point2, Point3, ShapeParams, Style } from './types';
 
 const smoothstep = (value: number) => {
@@ -95,7 +97,14 @@ function computeSmoothNormals(geometry: THREE.BufferGeometry) {
  * neck base. Separate upper/lower profiles describe the nape and throat;
  * the jaw transitions into the neck instead of closing into a spherical cap.
  */
-function buildNaturalHead(template: HeadTemplate, params: ShapeParams, expression?: ExpressionName): HeadSurface {
+interface NaturalHead {
+  identity: Point3[];
+  neutral: Point3[];
+  cage: HeadSurface;
+  surface: HeadSurface;
+}
+
+function buildNaturalHead(template: HeadTemplate, params: ShapeParams): NaturalHead {
   const canonicalCount = template.canonicalCount;
   if (
     canonicalCount !== 468 || template.positions.length < canonicalCount ||
@@ -105,7 +114,7 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams, expressio
 
   const identity = template.positions.slice(0, canonicalCount).map((point) => deformPoint(point, 'face', params));
   const neutral = closeNeutralLips(identity);
-  const facePositions = expression ? expressionPositions(neutral, identity, expression) : neutral;
+  const facePositions = neutral;
   const positions = [...facePositions];
   const parts: HeadPart[] = Array(canonicalCount).fill('face');
   const uv: Point2[] = template.uv.slice(0, canonicalCount).map(([u, v]) => [u, v]);
@@ -145,20 +154,48 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams, expressio
   // Lower midline: chin -> submental plane -> throat -> neck base.
   // Rows contain upper-y/z, lower-y/z, width relative to the face, and the
   // remaining face-contour detail. Dimensions follow the fitted face once.
-  const profile = [
+  const profileBase = [
     [maxY, foreheadZ, minY, chinZ, 1, 1],
-    [maxY + height * 0.10, foreheadZ - 1.1 * headScale, minY - height * 0.015, chinZ - 1.1 * headScale, 1.025, 0.90],
-    [maxY + height * 0.18, foreheadZ - 4.1 * headScale, minY - height * 0.025, chinZ - 2.6 * headScale, 1.04, 0.68],
-    [maxY + height * 0.20, -3.4 * headScale, minY - height * 0.045, chinZ - 3.7 * headScale, 1.01, 0.42],
-    [maxY + height * 0.14, -7.2 * headScale, minY - height * 0.075, chinZ - 4.25 * headScale, 0.98, 0.20],
-    [maxY - height * 0.02, -10.3 * headScale, minY - height * 0.10, chinZ - 4.4 * headScale, 0.90, 0.05],
-    [maxY - height * 0.24, -11.2 * headScale, minY - height * 0.12, chinZ - 4.4 * headScale, 0.79, 0],
-    [maxY - height * 0.54, -9.8 * headScale, minY - height * 0.14, chinZ - 4.3 * headScale, 0.68, 0],
-    [maxY - height * 0.80, -7.65 * headScale, minY - height * 0.16, chinZ - 4.25 * headScale, 0.62, 0],
-    [minY - height * 0.01, -7.1 * headScale, minY - height * 0.22, chinZ - 4.15 * headScale, 0.60, 0],
-    [minY - height * 0.20, -7.2 * headScale, minY - height * 0.28, chinZ - 3.75 * headScale, 0.62, 0],
-    [minY - height * 0.34, -7.7 * headScale, minY - height * 0.34, chinZ - 3.4 * headScale, 0.66, 0],
+    [maxY + height * 0.11, foreheadZ - 0.95 * headScale, minY - height * 0.015, chinZ - 1.1 * headScale, 1.00, 0.90],
+    [maxY + height * 0.19, foreheadZ - 3.65 * headScale, minY - height * 0.025, chinZ - 2.6 * headScale, 0.96, 0.68],
+    [maxY + height * 0.22, -4.9 * headScale, minY - height * 0.045, chinZ - 3.7 * headScale, 0.91, 0.42],
+    [maxY + height * 0.20, -6.85 * headScale, minY - height * 0.075, chinZ - 4.25 * headScale, 0.88, 0.20],
+    [maxY + height * 0.06, -9.7 * headScale, minY - height * 0.10, chinZ - 4.4 * headScale, 0.81, 0.05],
+    [maxY - height * 0.20, -10.7 * headScale, minY - height * 0.12, chinZ - 4.4 * headScale, 0.71, 0],
+    [maxY - height * 0.50, -9.35 * headScale, minY - height * 0.14, chinZ - 4.3 * headScale, 0.65, 0],
+    [maxY - height * 0.80, -7.3 * headScale, minY - height * 0.16, chinZ - 4.25 * headScale, 0.59, 0],
+    [minY - height * 0.01, -6.75 * headScale, minY - height * 0.22, chinZ - 4.15 * headScale, 0.58, 0],
+    [minY - height * 0.20, -6.85 * headScale, minY - height * 0.28, chinZ - 3.75 * headScale, 0.60, 0],
+    [minY - height * 0.34, -7.3 * headScale, minY - height * 0.34, chinZ - 3.4 * headScale, 0.64, 0],
   ];
+  const parameter = (key: string) => clamp(params[key] ?? 0, -1, 1);
+  // Spread crown-height adjustment from the forehead slope to the apex rather
+  // than concentrating it at one high point, which creates a bulbous dome.
+  const crownWeights = [0, 0.42, 0.82, 0.95, 0.82, 0.55, 0.25, 0.08, 0, 0, 0, 0];
+  const widthWeights = [0, 0.35, 0.7, 1, 1, 0.9, 0.75, 0.45, 0.1, 0, 0, 0];
+  const foreheadWidthWeights = [0, 0.2, 0.7, 1, 0.65, 0.3, 0.1, 0, 0, 0, 0, 0];
+  const templeWidthWeights = [0, 0.05, 0.35, 0.8, 1, 0.8, 0.45, 0.15, 0, 0, 0, 0];
+  const depthWeights = [0, 0.1, 0.35, 0.65, 0.9, 1, 1, 0.75, 0.35, 0.1, 0, 0];
+  const neckWeights = [0, 0, 0, 0, 0, 0, 0, 0.1, 0.45, 0.85, 1, 1];
+  const neckLengthWeights = [0, 0, 0, 0, 0, 0, 0, 0.05, 0.2, 0.55, 0.85, 1];
+  const crownHeight = parameter('craniumHeight'), craniumWidth = parameter('craniumWidth');
+  const craniumDepth = parameter('craniumDepth'), neckWidth = parameter('neckWidth'), neckLength = parameter('neckLength');
+  const foreheadWidth = parameter('foreheadWidth'), templeWidth = parameter('templeWidth');
+  const profile = profileBase.map(([upperY, upperZ, lowerY, lowerZ, widthScale, detail], index) => {
+    const neckOffset = height * 0.18 * neckLength * neckLengthWeights[index];
+    const skullWidth = 1
+      + 0.06 * craniumWidth * widthWeights[index]
+      + 0.03 * foreheadWidth * foreheadWidthWeights[index]
+      + 0.04 * templeWidth * templeWidthWeights[index];
+    return [
+      upperY + height * 0.14 * crownHeight * crownWeights[index] - neckOffset,
+      upperZ - headScale * 1.8 * craniumDepth * depthWeights[index],
+      lowerY - neckOffset,
+      lowerZ,
+      widthScale * skullWidth * (1 + 0.16 * neckWidth * neckWeights[index]),
+      detail,
+    ];
+  });
 
   // The same ordered contour becomes an inclined neck opening: forehead
   // vertices reach the nape, chin vertices reach the front of the throat.
@@ -217,7 +254,9 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams, expressio
       : [previousRing[index], previousRing[next], bottomCenter]);
   }
 
-  return smoothHeadSurface({ positions: relaxNapeCage(positions, triangles, canonicalCount, lastProfile[0], headScale), parts, uv, triangles, skinFade, faceTriangleCount });
+  const mouthRim = [...upperLipRim, ...lowerLipRim.slice(1, -1).reverse()];
+  const cage: HeadSurface = { positions: relaxNapeCage(positions, triangles, canonicalCount, lastProfile[0], headScale), parts, uv, triangles, skinFade, faceTriangleCount, mouthRim };
+  return { identity, neutral, cage, surface: smoothHeadSurface(cage) };
 }
 
 function applySkinColors(geometry: THREE.BufferGeometry, skinAt: SkinColorField) {
@@ -229,20 +268,59 @@ function applySkinColors(geometry: THREE.BufferGeometry, skinAt: SkinColorField)
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 }
 
-function addExpressionTargets(geometry: THREE.BufferGeometry, template: HeadTemplate, params: ShapeParams) {
+function createPhotoTexture(atlas: Uint8ClampedArray, size: number) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const context = canvas.getContext('2d');
+  if (!context) return undefined;
+  context.putImageData(new ImageData(new Uint8ClampedArray(atlas), size, size), 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+function addExpressionTargets(geometry: THREE.BufferGeometry, natural: NaturalHead, rig: ExpressionRigAsset, boundary: number[]) {
   const basePosition = geometry.getAttribute('position'), baseNormal = geometry.getAttribute('normal');
   const positions: THREE.BufferAttribute[] = [], normals: THREE.BufferAttribute[] = [];
-  for (const [name] of expressionControls) {
-    const surface = buildNaturalHead(template, params, name);
+  const faceDeltas = retargetExpressionDeltas(rig, natural.identity, natural.cage.triangles.slice(0, natural.cage.faceTriangleCount));
+  const mouthY = (natural.neutral[13][1] + natural.neutral[14][1]) * 0.5;
+  const deltaCages = expressionControls.map(([name]) => {
+    const deltaCage = natural.cage.positions.map((): Point3 => [0, 0, 0]);
+    for (let id = 0; id < natural.identity.length; id++) {
+      deltaCage[id] = faceDeltas[name][id];
+    }
+    // Continue only the moving lower jaw into the adjacent throat rings.
+    // Upper skull vertices retain their identity positions for every pose.
+    for (const [row, falloff] of [0.65, 0.3, 0.1].entries()) {
+      for (const [index, id] of boundary.entries()) {
+        const jaw = THREE.MathUtils.smoothstep(mouthY + 0.5 - natural.neutral[id][1], 0, 2);
+        deltaCage[natural.identity.length + row * boundary.length + index] = faceDeltas[name][id].map((value) => value * falloff * jaw) as Point3;
+      }
+    }
+    return deltaCage;
+  });
+  // Subdivision is linear: subdivide all facial displacement fields over the
+  // existing cage and share its topology, rather than rebuilding the skull six times.
+  const deltaSurfaces = smoothHeadSurfaceFields(natural.cage, deltaCages).fields;
+  for (const [targetIndex, [name]] of expressionControls.entries()) {
+    const deltaSurface = deltaSurfaces[targetIndex];
+    const targetPositions = natural.surface.positions.map((point, id): Point3 => [
+      point[0] + expressionIntensityMultiplier * deltaSurface[id][0],
+      point[1] + expressionIntensityMultiplier * deltaSurface[id][1],
+      point[2] + expressionIntensityMultiplier * deltaSurface[id][2],
+    ]);
     const target = new THREE.BufferGeometry();
-    target.setAttribute('position', new THREE.Float32BufferAttribute(surface.positions.flatMap(meters), 3));
-    target.setIndex(surface.triangles.flat());
+    target.setAttribute('position', new THREE.Float32BufferAttribute(targetPositions.flatMap(meters), 3));
+    target.setIndex(natural.surface.triangles.flat());
     computeSmoothNormals(target);
     const position = target.getAttribute('position'), normal = target.getAttribute('normal');
     const positionDelta = new Float32Array(position.count * 3), normalDelta = new Float32Array(position.count * 3);
     for (let id = 0; id < position.count; id++) {
-      positionDelta.set([position.getX(id) - basePosition.getX(id), position.getY(id) - basePosition.getY(id), position.getZ(id) - basePosition.getZ(id)], id * 3);
-      normalDelta.set([normal.getX(id) - baseNormal.getX(id), normal.getY(id) - baseNormal.getY(id), normal.getZ(id) - baseNormal.getZ(id)], id * 3);
+      positionDelta.set([position.getX(id) - basePosition.getX(id), position.getY(id) - basePosition.getY(id), position.getZ(id) - basePosition.getZ(id)].map((value) => value / expressionIntensityMultiplier), id * 3);
+      // Bake normals at the actual maximum. Extrapolating 1x normals at a 2x
+      // weight can turn the thin lip rims black even when positions are valid.
+      normalDelta.set([normal.getX(id) - baseNormal.getX(id), normal.getY(id) - baseNormal.getY(id), normal.getZ(id) - baseNormal.getZ(id)].map((value) => value / expressionIntensityMultiplier), id * 3);
     }
     const positionAttribute = new THREE.Float32BufferAttribute(positionDelta, 3);
     const normalAttribute = new THREE.Float32BufferAttribute(normalDelta, 3);
@@ -253,51 +331,7 @@ function addExpressionTargets(geometry: THREE.BufferGeometry, template: HeadTemp
   geometry.morphTargetsRelative = true;
   geometry.morphAttributes.position = positions;
   geometry.morphAttributes.normal = normals;
-  geometry.computeBoundingSphere();
-}
-
-function addMouthInterior(group: THREE.Group, head: THREE.BufferGeometry) {
-  const index = head.getIndex()!, position = head.getAttribute('position');
-  const edges = new Map<string, { a: number; b: number; count: number }>();
-  for (let offset = 0; offset < index.count; offset += 3) for (let corner = 0; corner < 3; corner++) {
-    const a = index.getX(offset + corner), b = index.getX(offset + (corner + 1) % 3);
-    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
-    const edge = edges.get(key);
-    if (edge) edge.count++;
-    else edges.set(key, { a, b, count: 1 });
-  }
-  const boundary = new Map<number, number[]>();
-  for (const { a, b, count } of edges.values()) if (count === 1) {
-    boundary.set(a, [...boundary.get(a) ?? [], b]);
-    boundary.set(b, [...boundary.get(b) ?? [], a]);
-  }
-  const rim = [13];
-  let previous = -1, next = 13;
-  do {
-    const neighbors = boundary.get(next);
-    if (!neighbors || neighbors.length !== 2) throw new Error('Không tìm được đường viền trong của môi.');
-    const following = neighbors.find((id) => id !== previous)!;
-    previous = next; next = following;
-    if (next !== 13) rim.push(next);
-  } while (next !== 13 && rim.length <= position.count);
-  const ring = (attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute, delta = false) => {
-    const vertices = rim.map((id): Point3 => [attribute.getX(id), attribute.getY(id), attribute.getZ(id) - (delta ? 0 : 0.00005)]);
-    const center = vertices.reduce((sum, point) => sum.map((value, axis) => value + point[axis] / vertices.length) as Point3, [0, 0, 0] as Point3);
-    if (!delta) center[2] -= 0.01;
-    return [...vertices, center].flat();
-  };
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(ring(position), 3));
-  geometry.setIndex(rim.flatMap((_, id) => [id, (id + 1) % rim.length, rim.length]));
-  geometry.morphTargetsRelative = true;
-  geometry.morphAttributes.position = head.morphAttributes.position!.map((attribute) => {
-    const target = new THREE.Float32BufferAttribute(ring(attribute, true), 3);
-    target.name = attribute.name;
-    return target;
-  });
-  const interior = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x231312, side: THREE.DoubleSide }));
-  interior.name = 'mouthInterior';
-  group.add(interior);
+  updateExpressionBounds(geometry);
 }
 
 function addEars(group: THREE.Group, head: THREE.Mesh, source: EarTemplate, params: ShapeParams, material: THREE.Material, halfWidth: number, skinAt: SkinColorField) {
@@ -393,11 +427,12 @@ function addEars(group: THREE.Group, head: THREE.Mesh, source: EarTemplate, para
   }
 }
 
-export function createHead(template: HeadTemplate, ears: EarTemplate, result?: HeadResult, params: ShapeParams = {}, style: Style = 'natural', strength = 0.5, flat = false) {
+export function createHead(template: HeadTemplate, ears: EarTemplate, rig: ExpressionRigAsset, result?: HeadResult, params: ShapeParams = {}, style: Style = 'natural', strength = 0.5, flat = false) {
   const group = new THREE.Group();
   group.name = 'headAsset';
   const effective = styledParams(params, style, strength);
-  const generated = buildNaturalHead(template, effective);
+  const natural = buildNaturalHead(template, effective);
+  const generated = natural.surface;
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(generated.positions.flatMap(meters), 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(generated.uv.flat(), 2));
@@ -409,21 +444,14 @@ export function createHead(template: HeadTemplate, ears: EarTemplate, result?: H
   geometry.addGroup(0, generated.faceTriangleCount * 3, 0);
   geometry.addGroup(generated.faceTriangleCount * 3, (generated.triangles.length - generated.faceTriangleCount) * 3, 1);
   computeSmoothNormals(geometry);
-  addExpressionTargets(geometry, template, effective);
+  addExpressionTargets(geometry, natural, rig, template.boundary);
 
   let texture: THREE.CanvasTexture | undefined;
-  if (result && !flat) {
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = result.atlasSize;
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('Không tạo được texture.');
-    context.putImageData(new ImageData(new Uint8ClampedArray(result.atlas), result.atlasSize, result.atlasSize), 0, 0);
-    texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.anisotropy = 4;
-  }
+  if (result?.atlas && !flat) texture = createPhotoTexture(result.atlas, result.atlasSize);
   const roughness = style === 'cartoon' ? 0.94 : 0.82;
-  const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: !texture, map: texture ?? null, roughness, metalness: 0, side: THREE.DoubleSide });
+  const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: flat || !texture, map: flat ? null : texture ?? null, roughness, metalness: 0, side: THREE.DoubleSide });
+  if (result?.atlas) faceMaterial.userData.photoAtlas = { pixels: result.atlas, size: result.atlasSize };
+  if (texture) faceMaterial.userData.photoTexture = texture;
   const skinMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness, metalness: 0, side: THREE.DoubleSide });
   const mesh = new THREE.Mesh(geometry, [faceMaterial, skinMaterial]);
   mesh.name = 'proceduralHeadAndNeck';
@@ -431,9 +459,25 @@ export function createHead(template: HeadTemplate, ears: EarTemplate, result?: H
 
   const halfWidth = Math.max(...template.boundary.map((id) => Math.abs(generated.positions[id][0])));
   addEars(group, mesh, ears, effective, skinMaterial, halfWidth, skinAt);
-  addMouthInterior(group, geometry);
-  group.userData = { generator: 'portrait-head-lab-procedural', schemaVersion: 1, units: 'metres', forward: '+Z', up: '+Y', style, shapeParams: { ...effective }, rigged: false };
+  addOralCavity(group, geometry, rig, generated.mouthRim!, natural.identity);
+  group.userData = { generator: 'portrait-head-lab-procedural', schemaVersion: 1, expressionSet, units: 'metres', forward: '+Z', up: '+Y', style, shapeParams: { ...effective }, rigged: false };
   return group;
+}
+
+export function updateFlatAppearance(object: THREE.Object3D | undefined, flat: boolean) {
+  object?.traverse((child) => {
+    if (!(child instanceof THREE.Mesh) || child.name !== 'proceduralHeadAndNeck') return;
+    const material = (Array.isArray(child.material) ? child.material[0] : child.material) as THREE.MeshStandardMaterial;
+    let texture = material.userData.photoTexture as THREE.Texture | undefined;
+    const atlas = material.userData.photoAtlas as { pixels: Uint8ClampedArray; size: number } | undefined;
+    if (!flat && !texture && atlas) {
+      texture = createPhotoTexture(atlas.pixels, atlas.size);
+      if (texture) material.userData.photoTexture = texture;
+    }
+    material.map = flat ? null : texture ?? null;
+    material.vertexColors = flat || !texture;
+    material.needsUpdate = true;
+  });
 }
 
 export function disposeObject(object: THREE.Object3D) {
@@ -445,6 +489,8 @@ export function disposeObject(object: THREE.Object3D) {
       materials.add(material);
       const mapped = material as THREE.MeshStandardMaterial;
       if (mapped.map) textures.add(mapped.map);
+      const photoTexture = material.userData.photoTexture;
+      if (photoTexture instanceof THREE.Texture) textures.add(photoTexture);
     }
   });
   textures.forEach((texture) => texture.dispose());

@@ -11,7 +11,9 @@ Chạy `npm run dev` và mở `http://localhost:5187`. Mesh đầu–cổ đư�
 5. Dựng, hủy ở bước phân tích và khớp, chọn ảnh khác rồi dựng lại. Model cũ không bị tác vụ đã hủy ghi đè. Nút Hủy không chờ fit xong.
 6. Thử 3 styles, sliders, reset, đổi style nhiều lần. Đổi qua lại phải khôi phục cùng hình học, không tích lũy deformation.
 7. Export từng style, mở GLB đã tải và so hình học/texture/orientation với preview. Dùng PNG front/¾/back để đối chiếu. Bật wireframe trước export, file xuất vẫn là vật liệu bình thường.
-   Với mỗi biểu cảm, kéo mức độ 0/50/100%, về trung tính, đổi shape/style rồi xuất ở mức khác 0. Mở lại GLB phải giữ mức đã chọn và tiếp tục chỉnh được; GLB cũ không có đủ sáu target phải khóa các nút biểu cảm.
+   Với mỗi preset mobile (Unbothered, Locked in, Cracking up, Full panic, Big winner, Spectacular flop), kéo mức độ 0/50/100%, về trung tính, đổi shape/style rồi xuất ở mức khác 0. Đối chiếu với mobile ở góc chính diện/¾/nghiêng; Big winner phải giữ nét bất đối xứng. Xem răng trên/dưới, lưỡi và thành khoang miệng khi há; chú ý xuyên môi/cằm ở Locked in 100%. Thử thay độ rộng miệng/hàm và bật Da phẳng.
+   Mở lại GLB phải giữ preset và đúng mức UI (ví dụ 65% vẫn là 65%, dù morph weight là 1,3), tiếp tục đổi preset được. Thử riêng Unbothered ở 0%, 80% và 100% để xác nhận giữ lựa chọn qua metadata. GLB sáu cảm xúc cũ phải hiện đúng bộ Vui/Buồn/Tức giận/Ngạc nhiên/Sợ hãi/Ghê tởm với mức 0–1; GLB không có đủ bộ target phải khóa nút.
+   Khi chọn preset hoặc kéo mức độ, không có request tải basis, giải mã rig, subdivision hoặc dựng lại khoang miệng. Kiểm tra thời gian dựng hình sau khi thay shape riêng với độ phản hồi của nút biểu cảm; chưa có benchmark xác nhận.
 8. Sau lần dựng đầu, tắt mạng và dựng tiếp trong tab còn mở. Dev server/static files phải có sẵn; không đánh đồng với offline reload toàn app.
 9. Dựng 20 lần, xóa ảnh so sánh, đóng trang; xem DevTools Memory/GPU, đảm bảo không tăng không giới hạn. Chưa có con số peak memory.
 10. Ghi rõ OS/CPU/RAM/browser, lần cold riêng, ít nhất 10 warm runs, tải số đo JSON. p50/p95 ít mẫu chỉ tham khảo. Thử Chrome/Edge/Firefox/Safari mới; chưa có browser nào được xác nhận pass.

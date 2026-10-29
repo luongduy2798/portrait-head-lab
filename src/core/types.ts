@@ -25,6 +25,7 @@ export interface Analysis {
   landmarks: Point3[];
   blendshapes: Record<string, number>;
   skin: Float32Array;
+  bodySkin?: Float32Array;
   hair: Float32Array;
   accessories: Float32Array;
   maskWidth: number;

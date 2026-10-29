@@ -1,88 +1,188 @@
 import * as THREE from 'three';
 import { clamp } from './shape';
+import { lowerLipRim, upperLipRim } from './mouth';
+import { outerLip } from './visibility';
+import type { ExpressionRigAsset } from './expression-rig';
 import type { Point3 } from './types';
 
+export const expressionSet = 'faceverse-mobile-v1';
 export const expressionControls = [
+  ['unbothered', 'Unbothered'], ['locked_in', 'Locked in'], ['cracking_up', 'Cracking up'],
+  ['full_panic', 'Full panic'], ['big_winner', 'Big winner'], ['spectacular_flop', 'Spectacular flop'],
+] as const;
+export const legacyExpressionControls = [
   ['happy', 'Vui'], ['sad', 'Buồn'], ['angry', 'Tức giận'],
   ['surprised', 'Ngạc nhiên'], ['fearful', 'Sợ hãi'], ['disgusted', 'Ghê tởm'],
 ] as const;
 export type ExpressionName = typeof expressionControls[number][0];
-export type ExpressionSelection = ExpressionName | 'neutral';
+export type ExpressionSelection = ExpressionName | typeof legacyExpressionControls[number][0] | 'neutral';
+export const expressionIntensityMultiplier = 2;
 
-interface ExpressionPose {
-  smile: number; frown: number; browInner: number; browOuter: number;
-  eyeOpen: number; jawOpen: number; mouthStretch: number; upperLip: number; noseRaise: number;
-}
-const poses: Record<ExpressionName, ExpressionPose> = {
-  happy: { smile: 1, frown: 0, browInner: 0.05, browOuter: 0.1, eyeOpen: -0.45, jawOpen: 0.12, mouthStretch: 0.65, upperLip: 0, noseRaise: 0 },
-  sad: { smile: 0, frown: 1, browInner: 0.85, browOuter: -0.3, eyeOpen: -0.2, jawOpen: 0, mouthStretch: -0.15, upperLip: 0, noseRaise: 0 },
-  angry: { smile: 0, frown: 0.35, browInner: -1, browOuter: 0.15, eyeOpen: -0.4, jawOpen: 0, mouthStretch: 0.1, upperLip: 0.05, noseRaise: 0.1 },
-  surprised: { smile: 0, frown: 0, browInner: 1, browOuter: 1, eyeOpen: 1, jawOpen: 1, mouthStretch: -0.5, upperLip: 0.15, noseRaise: 0 },
-  fearful: { smile: 0, frown: 0.4, browInner: 1, browOuter: 0.4, eyeOpen: 0.85, jawOpen: 0.45, mouthStretch: 0.75, upperLip: 0.15, noseRaise: 0 },
-  disgusted: { smile: 0, frown: 0.3, browInner: -0.4, browOuter: -0.15, eyeOpen: -0.3, jawOpen: 0.12, mouthStretch: -0.2, upperLip: 1, noseRaise: 1 },
-};
-const gaussian = (value: number, center: number, width: number) => Math.exp(-(((value - center) / width) ** 2));
-
-/** Author six bounded poses on the identity cage, before subdivision. The
- * original lip rows identify upper/lower lips even after neutral closure. */
-export function expressionPositions(neutral: Point3[], identity: Point3[], name: ExpressionName): Point3[] {
-  const pose = poses[name];
-  const mouthX = (identity[61][0] + identity[291][0]) * 0.5;
-  const mouthY = (identity[13][1] + identity[14][1]) * 0.5;
-  const halfMouth = Math.max(0.8, Math.abs(identity[291][0] - identity[61][0]) * 0.5);
-  const eyes = [[33, 133, 159, 145], [362, 263, 386, 374]].map((ids) =>
-    ids.reduce((sum, id) => sum.map((value, axis) => value + identity[id][axis] / ids.length) as Point3, [0, 0, 0] as Point3));
-  const browY = [70, 105, 107, 336, 334, 300].reduce((sum, id) => sum + identity[id][1] / 6, 0);
-  const eyeY = (eyes[0][1] + eyes[1][1]) * 0.5;
-  const hingeY = eyeY - 1.1, hingeZ = -1.5;
-  return neutral.map(([x, y, z], id): Point3 => {
-    const original = identity[id], mx = (x - mouthX) / halfMouth;
-    const mouth = gaussian(y, mouthY, 1.2) * Math.exp(-((mx / 1.3) ** 4));
-    const corner = gaussian(Math.abs(mx), 0.95, 0.45) * gaussian(y, mouthY, 1.15);
-    const lipCenter = (identity[61][1] + identity[291][1]) * 0.5;
-    const curve = mouthY + (lipCenter - mouthY) * Math.min(1, mx * mx);
-    const lower = original[1] < curve;
-    const lip = gaussian(original[1], curve, 0.7) * Math.exp(-((mx / 0.85) ** 4));
-    const jaw = Math.max(THREE.MathUtils.smoothstep(mouthY - original[1], 0.1, 1.7), lower ? lip : 0);
-    const theta = 0.2 * pose.jawOpen * jaw;
-    let dy = (y - hingeY) * (Math.cos(theta) - 1) - (z - hingeZ) * Math.sin(theta);
-    let dz = (y - hingeY) * Math.sin(theta) + (z - hingeZ) * (Math.cos(theta) - 1);
-    let dx = (x - mouthX) * 0.12 * pose.mouthStretch * mouth;
-    dy += (0.75 * pose.smile - 0.55 * pose.frown) * corner;
-    dy += (lower ? 0 : 0.18 * pose.jawOpen + 0.55 * pose.upperLip) * lip;
-    const cheek = gaussian(Math.abs(x - mouthX), halfMouth + 1.2, 1.7) * gaussian(y, mouthY + 2.3, 1.6);
-    dy += 0.3 * pose.smile * cheek;
-    dz += 0.12 * pose.smile * cheek;
-    const eye = eyes[x < 0 ? 0 : 1];
-    const eyeMask = gaussian(x, eye[0], 1.5) * gaussian(y, eye[1], 0.9);
-    dy += (y - eye[1]) * 0.5 * pose.eyeOpen * eyeMask;
-    const inner = gaussian(Math.abs(x), 1.6, 1.1), outer = gaussian(Math.abs(x), 4.4, 1.4);
-    const brow = gaussian(y, browY, 0.85);
-    dy += 0.65 * (pose.browInner * inner + pose.browOuter * outer) * brow;
-    dx -= Math.sign(x) * 0.15 * Math.max(0, -pose.browInner) * inner * brow;
-    const nose = gaussian(x, 0, 1.25) * gaussian(y, identity[2][1], 1.15);
-    dy += 0.25 * pose.noseRaise * nose;
-    dz += 0.12 * pose.noseRaise * nose;
-    return [x + dx, y + dy, z + dz];
-  });
-}
-
-export function supportsExpressions(object?: THREE.Object3D): boolean {
-  let supported = false;
+function profile(object?: THREE.Object3D): 'mobile' | 'legacy' | undefined {
+  let mobile = false, legacy = false;
   object?.traverse((child) => {
-    if (child instanceof THREE.Mesh && expressionControls.every(([name]) => child.morphTargetDictionary?.[name] !== undefined)) supported = true;
+    if (!(child instanceof THREE.Mesh)) return;
+    const dictionary = child.morphTargetDictionary;
+    if (expressionControls.every(([name]) => dictionary?.[name] !== undefined)) mobile = true;
+    if (legacyExpressionControls.every(([name]) => dictionary?.[name] !== undefined)) legacy = true;
   });
-  return supported;
+  return mobile ? 'mobile' : legacy ? 'legacy' : undefined;
+}
+
+export function controlsForObject(object?: THREE.Object3D) {
+  return profile(object) === 'legacy' ? legacyExpressionControls : expressionControls;
+}
+
+export function supportsExpressions(object?: THREE.Object3D): boolean { return profile(object) !== undefined; }
+
+/** Include the full 2x preset range in culling bounds. Exact export bounds are
+ * still measured from the active pose by Box3.setFromObject(..., true). */
+export function updateExpressionBounds(geometry: THREE.BufferGeometry) {
+  const base = new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
+  const bounds = base.clone();
+  for (const attribute of geometry.morphAttributes.position ?? []) {
+    const delta = new THREE.Box3().setFromBufferAttribute(attribute as THREE.BufferAttribute);
+    bounds.expandByPoint(base.min.clone().addScaledVector(delta.min, expressionIntensityMultiplier));
+    bounds.expandByPoint(base.max.clone().addScaledVector(delta.max, expressionIntensityMultiplier));
+  }
+  geometry.boundingBox = bounds;
+  geometry.boundingSphere = bounds.getBoundingSphere(new THREE.Sphere());
 }
 
 export function applyExpression(object: THREE.Object3D, selected: ExpressionSelection, strength: number) {
-  const amount = clamp(strength, 0, 1);
+  const mobile = profile(object) === 'mobile';
+  const controls = mobile ? expressionControls : legacyExpressionControls;
+  const name = controls.some(([id]) => id === selected) ? selected : 'neutral';
+  const amount = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0;
+  const gain = mobile ? expressionIntensityMultiplier : 1;
   object.traverse((child) => {
     if (!(child instanceof THREE.Mesh) || !child.morphTargetInfluences || !child.morphTargetDictionary) return;
-    for (const [name] of expressionControls) {
-      const index = child.morphTargetDictionary[name];
-      if (index !== undefined) child.morphTargetInfluences[index] = name === selected ? amount : 0;
+    for (const [id] of [...expressionControls, ...legacyExpressionControls]) {
+      const index = child.morphTargetDictionary[id];
+      if (index !== undefined) child.morphTargetInfluences[index] = id === name ? amount * gain : 0;
     }
   });
-  object.userData.expression = { name: selected, strength: amount };
+  object.userData.expressionSet = mobile ? expressionSet : 'legacy-six-v1';
+  object.userData.expression = { name, strength: amount };
+}
+
+/** glTF may wrap the exported group in a scene. Prefer its normalized UI
+ * metadata, including zero-weight Unbothered, over guessing from raw weights. */
+export function readExpression(object: THREE.Object3D): { name: ExpressionSelection; strength: number } {
+  const controls = controlsForObject(object), mobile = profile(object) === 'mobile';
+  let saved: { name: ExpressionSelection; strength: number } | undefined;
+  object.traverse((child) => {
+    const value = child.userData.expression;
+    if (!saved && child.userData.expressionSet === (mobile ? expressionSet : 'legacy-six-v1') &&
+      value && (value.name === 'neutral' || controls.some(([name]) => name === value.name)) &&
+      typeof value.strength === 'number' && Number.isFinite(value.strength)) {
+      saved = { name: value.name, strength: clamp(value.strength, 0, 1) };
+    }
+  });
+  if (saved) return saved;
+  let name: ExpressionSelection = 'neutral', maximum = 0;
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    for (const [id] of controls) {
+      const index = child.morphTargetDictionary?.[id];
+      const value = index === undefined ? 0 : child.morphTargetInfluences?.[index] ?? 0;
+      if (Number.isFinite(value) && value > maximum) { maximum = value; name = id; }
+    }
+  });
+  return { name, strength: clamp(maximum / (mobile ? expressionIntensityMultiplier : 1), 0, 1) };
+}
+
+function facialFrame(points: readonly Point3[]) {
+  const p = (id: number) => new THREE.Vector3(...points[id]);
+  const x = p(263).sub(p(33)), y = p(10).sub(p(152));
+  const width = x.length(), height = y.length();
+  x.normalize(); y.addScaledVector(x, -y.dot(x)).normalize();
+  const z = x.clone().cross(y).normalize(); y.copy(z).cross(x);
+  return { basis: new THREE.Matrix3().set(x.x, y.x, z.x, x.y, y.y, z.y, x.z, y.z, z.z), width, height };
+}
+
+/** A common resting mouth frame places the dental arches and tongue. The same
+ * transform is used on every source pose, preserving native jaw alignment. */
+export function mouthTransform(source: readonly Point3[], target: readonly Point3[]) {
+  const frame = (points: readonly Point3[]) => {
+    const p = (id: number) => new THREE.Vector3(...points[id]);
+    const x = p(291).sub(p(61)), y = p(2).sub(p(152));
+    const width = Math.max(1e-4, x.length());
+    x.normalize(); y.addScaledVector(x, -y.dot(x));
+    const height = Math.max(1e-4, y.length()); y.normalize();
+    const z = x.clone().cross(y).normalize(); y.copy(z).cross(x);
+    const origin = p(13).add(p(14)).multiplyScalar(0.5);
+    return new THREE.Matrix4().makeBasis(x, y, z)
+      .scale(new THREE.Vector3(width, height, Math.sqrt(width * height))).setPosition(origin);
+  };
+  return frame(target).multiply(frame(source).invert());
+}
+
+/** Fit a local affine differential from each canonical one-ring. Its normal
+ * constraint supplies depth where surface neighbors alone are nearly planar.
+ * No face geometry from FaceVerse replaces the fitted identity. */
+export function retargetExpressionDeltas(rig: ExpressionRigAsset, identity: Point3[], triangles: [number, number, number][]) {
+  const source = rig.landmarks.map((point) => new THREE.Vector3(...point));
+  const destination = identity.map((point) => new THREE.Vector3(...point));
+  const neighbors = source.map(() => new Set<number>());
+  const sourceNormals = source.map(() => new THREE.Vector3()), targetNormals = source.map(() => new THREE.Vector3());
+  const normal = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3();
+  for (const [i, j, k] of triangles) {
+    neighbors[i].add(j).add(k); neighbors[j].add(i).add(k); neighbors[k].add(i).add(j);
+    for (const [points, normals] of [[source, sourceNormals], [destination, targetNormals]] as const) {
+      normal.crossVectors(a.subVectors(points[j], points[i]), b.subVectors(points[k], points[i]));
+      for (const id of [i, j, k]) normals[id].add(normal);
+    }
+  }
+  const from = facialFrame(rig.landmarks), to = facialFrame(identity);
+  const scale = Math.sqrt(to.width * to.height / Math.max(1e-8, from.width * from.height));
+  const fallback = to.basis.clone().multiply(from.basis.clone().transpose()).multiplyScalar(scale);
+  const outer = (values: number[], u: THREE.Vector3, v: THREE.Vector3, weight = 1) => {
+    const x = u.toArray(), y = v.toArray();
+    for (let row = 0; row < 3; row++) for (let column = 0; column < 3; column++) values[row * 3 + column] += x[row] * y[column] * weight;
+  };
+  const transforms = source.map((point, id) => {
+    const covariance = Array(9).fill(0) as number[], cross = Array(9).fill(0) as number[];
+    let distance = 0;
+    for (const neighbor of neighbors[id]) {
+      a.subVectors(source[neighbor], point); b.subVectors(destination[neighbor], destination[id]);
+      outer(covariance, a, a); outer(cross, b, a); distance += a.lengthSq();
+    }
+    const n = sourceNormals[id].clone().normalize(), m = targetNormals[id].clone().normalize();
+    if (distance < 1e-10 || n.lengthSq() < 0.5 || m.lengthSq() < 0.5) return fallback;
+    outer(covariance, n, n, distance * 0.25); outer(cross, m, n, distance * 0.25 * scale);
+    const matrix = new THREE.Matrix3().fromArray(covariance).transpose();
+    if (Math.abs(matrix.determinant()) < 1e-10) return fallback;
+    const transform = new THREE.Matrix3().fromArray(cross).transpose().multiply(matrix.invert());
+    const lengths = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)]
+      .map((axis) => axis.applyMatrix3(transform).length() / scale);
+    return lengths.every((value) => Number.isFinite(value) && value > 0.25 && value < 4) && transform.determinant() > 0 ? transform : fallback;
+  });
+  // Per-vertex affine frames can disagree sharply between the inner/outer
+  // lips. A wide smile then folds a thin lip row into a projecting shelf.
+  // Share the dental/jaw frame across the lips and mandible, fading into the
+  // local facial frames above the mouth. Keep adjacent lip rows coherent too.
+  const mouthLinear = new THREE.Matrix3().setFromMatrix4(mouthTransform(rig.landmarks, identity));
+  const lipDistances = source.map(() => Infinity), queue = [...new Set([...upperLipRim, ...lowerLipRim, ...outerLip])];
+  for (const id of queue) lipDistances[id] = 0;
+  for (let i = 0; i < queue.length; i++) {
+    const id = queue[i];
+    if (lipDistances[id] >= 3) continue;
+    for (const neighbor of neighbors[id]) if (lipDistances[neighbor] > lipDistances[id] + 1) {
+      lipDistances[neighbor] = lipDistances[id] + 1; queue.push(neighbor);
+    }
+  }
+  const mouthY = (source[13].y + source[14].y) * 0.5;
+  const upperHeight = Math.max(1e-4, source[2].y - mouthY);
+  const mouthWeights = source.map((point, id) => Math.max(
+    1 - THREE.MathUtils.smootherstep(point.y, mouthY + upperHeight * 0.15, source[2].y),
+    lipDistances[id] <= 1 ? 1 : lipDistances[id] === 2 ? 0.75 : lipDistances[id] === 3 ? 0.25 : 0,
+  ));
+  return Object.fromEntries(expressionControls.map(([name]) => [name,
+    rig.deltas[name].map((delta, id): Point3 => {
+      const local = new THREE.Vector3(...delta).applyMatrix3(transforms[id]);
+      const mouth = new THREE.Vector3(...delta).applyMatrix3(mouthLinear);
+      return local.lerp(mouth, mouthWeights[id]).toArray() as Point3;
+    }),
+  ])) as Record<ExpressionName, Point3[]>;
 }

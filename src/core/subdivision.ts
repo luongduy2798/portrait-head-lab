@@ -1,6 +1,7 @@
 import type { HeadPart, Point2, Point3 } from './types';
 
 export interface HeadSurface {
+  mouthRim?: number[];
   positions: Point3[];
   parts: HeadPart[];
   uv: Point2[];
@@ -10,11 +11,23 @@ export interface HeadSurface {
   photoPoints?: Point2[];
 }
 
+export interface SubdividedHeadFields {
+  surface: HeadSurface;
+  fields: Point3[][];
+}
+
 /** Refine geometry and photo correspondence with the same Loop weights.
  * UVs only subdivide the atlas domain; smoothing photo coordinates removes
  * the affine breaks that would otherwise bend glasses at cage edges. */
 export function smoothHeadSurface(head: HeadSurface, passes = 3): HeadSurface {
+  return smoothHeadSurfaceFields(head, [], passes).surface;
+}
+
+/** Subdivide several displacement fields together so they share the same
+ * expensive edge/neighbor topology instead of rebuilding it for each morph. */
+export function smoothHeadSurfaceFields(head: HeadSurface, fields: Point3[][], passes = 3): SubdividedHeadFields {
   let surface = head;
+  let subdividedFields = fields;
   const edgeKey = (a: number, b: number) => a < b ? `${a}:${b}` : `${b}:${a}`;
 
   for (let pass = 0; pass < passes; pass++) {
@@ -46,20 +59,25 @@ export function smoothHeadSurface(head: HeadSurface, passes = 3): HeadSurface {
         return value * (1 - count * beta) + total * beta;
       }) as T;
     };
-    const positions = surface.positions.map((_, index) => smoothVertex(surface.positions, index));
-    const sourcePhotoPoints = surface.photoPoints;
-    const photoPoints = sourcePhotoPoints?.map((_, index) => smoothVertex(sourcePhotoPoints, index));
+    let nextVertex = surface.positions.length;
+    for (const edge of edges.values()) edge.vertex = nextVertex++;
+    const subdivideValues = <T extends Point2 | Point3>(values: T[]): T[] => {
+      const result = values.map((_, index) => smoothVertex(values, index));
+      for (const { a, b, opposite } of edges.values()) {
+        const smoothEdge = values[a].map((value, axis) => {
+          if (opposite.length !== 2) return (value + values[b][axis]) * 0.5;
+          return 0.375 * (value + values[b][axis])
+            + 0.125 * (values[opposite[0]][axis] + values[opposite[1]][axis]);
+        }) as T;
+        result.push(smoothEdge);
+      }
+      return result;
+    };
+    const positions = subdivideValues(surface.positions);
+    subdividedFields = subdividedFields.map(subdivideValues);
+    const photoPoints = surface.photoPoints ? subdivideValues(surface.photoPoints) : undefined;
     const parts = [...surface.parts], uv = [...surface.uv], skinFade = [...surface.skinFade];
-    for (const edge of edges.values()) {
-      const { a, b, opposite } = edge;
-      const smoothEdge = <T extends Point2 | Point3>(values: T[]): T => values[a].map((value, axis) => {
-        if (opposite.length !== 2) return (value + values[b][axis]) * 0.5;
-        return 0.375 * (value + values[b][axis])
-          + 0.125 * (values[opposite[0]][axis] + values[opposite[1]][axis]);
-      }) as T;
-      edge.vertex = positions.length;
-      positions.push(smoothEdge(surface.positions));
-      if (photoPoints && sourcePhotoPoints) photoPoints.push(smoothEdge(sourcePhotoPoints));
+    for (const { a, b } of edges.values()) {
       parts.push(surface.parts[a] === surface.parts[b] ? surface.parts[a] : 'bridge');
       uv.push([(surface.uv[a][0] + surface.uv[b][0]) * 0.5, (surface.uv[a][1] + surface.uv[b][1]) * 0.5]);
       skinFade.push((surface.skinFade[a] + surface.skinFade[b]) * 0.5);
@@ -71,7 +89,8 @@ export function smoothHeadSurface(head: HeadSurface, passes = 3): HeadSurface {
       const ca = edges.get(edgeKey(c, a))!.vertex;
       triangles.push([a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]);
     }
-    surface = { positions, parts, uv, triangles, skinFade, photoPoints, faceTriangleCount: surface.faceTriangleCount * 4 };
+    const mouthRim = surface.mouthRim?.flatMap((id, i, rim) => [id, edges.get(edgeKey(id, rim[(i + 1) % rim.length]))!.vertex]);
+    surface = { positions, parts, uv, triangles, skinFade, photoPoints, mouthRim, faceTriangleCount: surface.faceTriangleCount * 4 };
   }
-  return surface;
+  return { surface, fields: subdividedFields };
 }
