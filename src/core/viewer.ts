@@ -8,6 +8,8 @@ export class HeadViewer {
   private renderer: THREE.WebGLRenderer;
   private controls: OrbitControls;
   private observer: ResizeObserver;
+  private keyLight: THREE.DirectionalLight;
+  private fillLights: THREE.DirectionalLight[] = [];
   private frame = 0;
   private object?: THREE.Object3D;
   private target = new THREE.Vector3(0, -0.022, -0.01);
@@ -22,6 +24,8 @@ export class HeadViewer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.setAttribute('aria-label', 'Đầu 3D; kéo chuột để xoay, cuộn để phóng to');
     this.renderer.domElement.addEventListener('webglcontextlost', (event) => {
       event.preventDefault();
@@ -33,9 +37,29 @@ export class HeadViewer {
     this.controls.enablePan = false;
     this.controls.minDistance = 0.23; this.controls.maxDistance = 1.2;
     this.controls.addEventListener('change', this.scheduleRender);
-    this.scene.add(new THREE.HemisphereLight(0xf8f4ff, 0x44465b, 2.4));
-    const key = new THREE.DirectionalLight(0xffffff, 2.6); key.position.set(-0.3, 0.4, 0.6); this.scene.add(key);
-    const fill = new THREE.DirectionalLight(0xbed1ff, 1.1); fill.position.set(0.3, 0.15, -0.4); this.scene.add(fill);
+    // Favor neutral, broad illumination so turning the head does not create
+    // strong one-sided color shifts on the uniform generated skin material.
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 1.3));
+    this.keyLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    this.keyLight.position.set(0, 0.4, 0.7);
+    this.keyLight.castShadow = true;
+    this.keyLight.shadow.mapSize.set(1024, 1024);
+    this.keyLight.shadow.camera.near = 0.01;
+    this.keyLight.shadow.camera.far = 1.5;
+    this.keyLight.shadow.bias = -0.0001;
+    this.keyLight.shadow.normalBias = 0.002;
+    this.keyLight.shadow.radius = 2;
+    this.keyLight.shadow.autoUpdate = false;
+    this.scene.add(this.keyLight);
+    // Equal left/right fills remove the impression of a fixed 3/4 key light;
+    // a weak rear fill keeps the occiput readable without erasing real shadows.
+    this.fillLights = [
+      new THREE.DirectionalLight(0xffffff, 0.28),
+      new THREE.DirectionalLight(0xffffff, 0.28),
+      new THREE.DirectionalLight(0xffffff, 0.22),
+    ];
+    for (const light of this.fillLights) this.scene.add(light);
     this.observer = new ResizeObserver(() => this.resize()); this.observer.observe(container);
     this.angle('front'); this.resize(); this.scheduleRender();
   }
@@ -57,10 +81,17 @@ export class HeadViewer {
   setHead(object: THREE.Object3D, fit = true) {
     if (this.object) { this.scene.remove(this.object); disposeObject(this.object); }
     this.object = object; this.scene.add(object);
+    object.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
     if (fit) {
       this.fitHead(object);
       this.angle(this.currentAngle);
     }
+    this.keyLight.shadow.needsUpdate = true;
     this.scheduleRender();
   }
   getHead() { return this.object; }
@@ -73,6 +104,27 @@ export class HeadViewer {
     const center = bounds.getCenter(new THREE.Vector3());
     const radius = size.length() * 0.5;
     if (![...size.toArray(), ...center.toArray(), radius].every(Number.isFinite) || radius <= 0) return;
+
+    this.keyLight.position.copy(center).addScaledVector(new THREE.Vector3(0, 1.6, 3), radius);
+    this.keyLight.target.position.copy(center);
+    this.keyLight.target.updateMatrixWorld();
+    const fillDirections = [
+      new THREE.Vector3(-2, 0.8, 1.6),
+      new THREE.Vector3(2, 0.8, 1.6),
+      new THREE.Vector3(0, 0.6, -2.4),
+    ];
+    this.fillLights.forEach((light, index) => {
+      light.position.copy(center).addScaledVector(fillDirections[index], radius);
+      light.target.position.copy(center);
+      light.target.updateMatrixWorld();
+    });
+    const shadowExtent = Math.max(radius * 1.25, 0.12);
+    this.keyLight.shadow.camera.left = -shadowExtent;
+    this.keyLight.shadow.camera.right = shadowExtent;
+    this.keyLight.shadow.camera.top = shadowExtent;
+    this.keyLight.shadow.camera.bottom = -shadowExtent;
+    this.keyLight.shadow.camera.far = Math.max(1.5, radius * 5);
+    this.keyLight.shadow.camera.updateProjectionMatrix();
 
     this.target.copy(center);
     this.target.y -= size.y * 0.035;

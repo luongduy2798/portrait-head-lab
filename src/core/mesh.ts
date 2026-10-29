@@ -16,6 +16,24 @@ const smoothstep = (value: number) => {
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const meters = (point: Point3): Point3 => point.map((value) => value * 0.01) as Point3;
 
+/** Fair the sparse crown-to-occiput guide after shape controls are applied.
+ * Loop subdivision smooths the surface, but a sharp change between profile
+ * rings can still leave a visible ridge along the skull silhouette. */
+function fairCranialProfile(profile: number[][]): number[][] {
+  const result = profile.map((row) => [...row]);
+  for (let pass = 0; pass < 2; pass++) {
+    const source = result.map((row) => [...row]);
+    for (let index = 2; index <= 8; index++) {
+      const strength = index === 2 || index === 8 ? 0.18 : 0.28;
+      for (const axis of [0, 1]) {
+        const neighborMean = (source[index - 1][axis] + source[index + 1][axis]) * 0.5;
+        result[index][axis] = source[index][axis] + (neighborMean - source[index][axis]) * strength;
+      }
+    }
+  }
+  return result;
+}
+
 /** Fair the coarse nape before subdivision. Constraining the face, crown and
  * neck base removes the long loft crease without projecting a finished mesh
  * onto a different surface or expanding the cap vertices. */
@@ -24,9 +42,14 @@ function relaxNapeCage(points: Point3[], triangles: [number, number, number][], 
   for (const [a, b, c] of triangles) {
     neighbors[a].add(b).add(c); neighbors[b].add(a).add(c); neighbors[c].add(a).add(b);
   }
-  const weights = points.map((point, index) => index < canonicalCount ? 0
-    : THREE.MathUtils.smootherstep(5 * scale - point[1], 0, 7 * scale)
-      * THREE.MathUtils.smootherstep(point[1] - baseY, 0, 3 * scale));
+  const faceCenterZ = points.slice(0, canonicalCount).reduce((sum, point) => sum + point[2], 0) / canonicalCount;
+  const weights = points.map((point, index) => {
+    if (index < canonicalCount) return 0;
+    const vertical = THREE.MathUtils.smootherstep(8 * scale - point[1], 0, 10 * scale)
+      * THREE.MathUtils.smootherstep(point[1] - baseY, 0, 5 * scale);
+    const posterior = THREE.MathUtils.smootherstep(faceCenterZ - point[2], 1.5 * scale, 8 * scale);
+    return vertical * posterior;
+  });
   let positions = points;
   for (let iteration = 0; iteration < 16; iteration++) {
     positions = positions.map((point, index): Point3 => {
@@ -193,9 +216,9 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measureme
     [maxY - height * 0.20, -10.7 * headScale, minY - height * 0.12, chinZ - 4.4 * headScale, 0.71, 0],
     [maxY - height * 0.50, -9.35 * headScale, minY - height * 0.14, chinZ - 4.3 * headScale, 0.65, 0],
     [maxY - height * 0.80, -7.3 * headScale, minY - height * 0.16, chinZ - 4.25 * headScale, 0.59, 0],
-    [minY - height * 0.01, -6.75 * headScale, minY - height * 0.22, chinZ - 4.15 * headScale, 0.58, 0],
-    [minY - height * 0.20, -6.85 * headScale, minY - height * 0.28, chinZ - 3.75 * headScale, 0.60, 0],
-    [minY - height * 0.34, -7.3 * headScale, minY - height * 0.34, chinZ - 3.4 * headScale, 0.64, 0],
+    [minY - height * 0.01, -6.75 * headScale, minY - height * 0.18, chinZ - 4.15 * headScale, 0.58, 0],
+    [minY - height * 0.15, -6.85 * headScale, minY - height * 0.23, chinZ - 3.75 * headScale, 0.56, 0],
+    [minY - height * 0.28, -7.3 * headScale, minY - height * 0.28, chinZ - 3.4 * headScale, 0.58, 0],
   ];
   const parameter = (key: string) => clamp(params[key] ?? 0, -1, 1);
   // Spread crown-height adjustment from the forehead slope to the apex rather
@@ -210,8 +233,8 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measureme
   const crownHeight = parameter('craniumHeight'), craniumWidth = parameter('craniumWidth');
   const craniumDepth = parameter('craniumDepth'), neckWidth = parameter('neckWidth'), neckLength = parameter('neckLength');
   const foreheadWidth = parameter('foreheadWidth'), templeWidth = parameter('templeWidth');
-  const profile = profileBase.map(([upperY, upperZ, lowerY, lowerZ, widthScale, detail], index) => {
-    const neckOffset = height * 0.18 * neckLength * neckLengthWeights[index];
+  const profile = fairCranialProfile(profileBase.map(([upperY, upperZ, lowerY, lowerZ, widthScale, detail], index) => {
+    const neckOffset = height * 0.12 * neckLength * neckLengthWeights[index];
     const skullWidth = 1
       + 0.06 * craniumWidth * widthWeights[index]
       + 0.03 * foreheadWidth * foreheadWidthWeights[index]
@@ -221,10 +244,10 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measureme
       upperZ - headScale * 1.8 * craniumDepth * depthWeights[index],
       lowerY - neckOffset,
       lowerZ,
-      widthScale * skullWidth * (1 + 0.16 * neckWidth * neckWeights[index]),
+      widthScale * skullWidth * (1 + 0.08 * neckWidth * neckWeights[index]) * (1 - 0.08 * neckWeights[index]),
       detail,
     ];
-  });
+  }));
 
   // The same ordered contour becomes an inclined neck opening: forehead
   // vertices reach the nape, chin vertices reach the front of the throat.
@@ -493,7 +516,10 @@ export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: Exp
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(generated.uv.flat(), 2));
 
   const skin: [number, number, number] = result?.skinColor ?? [197, 159, 137];
-  const skinAt = createSkinField(skin, result?.skinSamples ?? [], effective);
+  // The generated cranium, nape, neck and ears share one diffuse skin tone.
+  // Face-region samples remain useful for painting the photo atlas, but using
+  // them here copied local photo highlights/shadows onto otherwise unseen skin.
+  const skinAt = createSkinField(skin, [], effective);
   applySkinColors(geometry, skinAt);
   geometry.setIndex(generated.triangles.flat());
   geometry.addGroup(0, generated.faceTriangleCount * 3, 0);
