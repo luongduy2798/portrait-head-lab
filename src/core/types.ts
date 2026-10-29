@@ -37,11 +37,24 @@ export interface CameraFit extends Record<string, number> {
   scale: number; tx: number; ty: number;
 }
 export type ShapeParams = Record<string, number>;
+export interface HeadMeasurements {
+  faceAspectRatio: number;
+  foreheadScale: number;
+  cheekScale: number;
+  jawScale: number;
+  lowerJawScale: number;
+  chinScale: number;
+  crownHeightRatio?: number;
+  headWidthToFaceRatio?: number;
+  neckWidthToFaceRatio?: number;
+  neckLengthToFaceRatio?: number;
+}
 export type Style = 'natural' | 'cartoon' | 'caricature';
 export interface GenerationOptions { occludedEyes: boolean }
 export interface PaletteOverrides { skin?: string; eyes?: string; brows?: string }
 export interface FitResult {
   params: ShapeParams;
+  measurements: HeadMeasurements;
   expression: ShapeParams;
   camera: CameraFit;
   projected: Point2[];

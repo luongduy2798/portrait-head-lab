@@ -32,21 +32,27 @@ export class HeadViewer {
     this.controls.enableDamping = true;
     this.controls.enablePan = false;
     this.controls.minDistance = 0.23; this.controls.maxDistance = 1.2;
+    this.controls.addEventListener('change', this.scheduleRender);
     this.scene.add(new THREE.HemisphereLight(0xf8f4ff, 0x44465b, 2.4));
     const key = new THREE.DirectionalLight(0xffffff, 2.6); key.position.set(-0.3, 0.4, 0.6); this.scene.add(key);
     const fill = new THREE.DirectionalLight(0xbed1ff, 1.1); fill.position.set(0.3, 0.15, -0.4); this.scene.add(fill);
     this.observer = new ResizeObserver(() => this.resize()); this.observer.observe(container);
-    this.angle('front'); this.resize(); this.animate();
+    this.angle('front'); this.resize(); this.scheduleRender();
   }
   private resize() {
     const width = Math.max(1, this.container.clientWidth), height = Math.max(1, this.container.clientHeight);
     this.renderer.setSize(width, height); this.camera.aspect = width / height; this.camera.updateProjectionMatrix();
+    this.scheduleRender();
   }
-  private animate = () => {
-    this.frame = requestAnimationFrame(this.animate);
+  private scheduleRender = () => {
+    if (!this.frame) this.frame = requestAnimationFrame(this.renderFrame);
+  };
+  private renderFrame = () => {
+    this.frame = 0;
     this.controls.autoRotate = this.turn !== 0;
     this.controls.autoRotateSpeed = this.turn;
     this.controls.update(); this.renderer.render(this.scene, this.camera);
+    if (this.turn !== 0) this.scheduleRender();
   };
   setHead(object: THREE.Object3D, fit = true) {
     if (this.object) { this.scene.remove(this.object); disposeObject(this.object); }
@@ -55,8 +61,10 @@ export class HeadViewer {
       this.fitHead(object);
       this.angle(this.currentAngle);
     }
+    this.scheduleRender();
   }
   getHead() { return this.object; }
+  render() { this.scheduleRender(); }
   private fitHead(object: THREE.Object3D) {
     object.updateWorldMatrix(true, true);
     const bounds = new THREE.Box3().setFromObject(object, true);
@@ -80,13 +88,14 @@ export class HeadViewer {
     this.currentAngle = angle;
     const theta = angle === 'front' ? 0 : angle === 'quarter' ? Math.PI / 4 : Math.PI;
     this.camera.position.set(this.target.x + Math.sin(theta) * this.viewDistance, this.target.y + this.viewRadius * 0.12, this.target.z + Math.cos(theta) * this.viewDistance);
-    this.controls.target.copy(this.target); this.camera.lookAt(this.target); this.controls.update();
+    this.controls.target.copy(this.target); this.camera.lookAt(this.target); this.controls.update(); this.scheduleRender();
   }
-  rotation(enabled: boolean) { this.turn = enabled ? 0.8 : 0; }
+  rotation(enabled: boolean) { this.turn = enabled ? 0.8 : 0; this.scheduleRender(); }
   wireframe(enabled: boolean) {
     this.object?.traverse((child) => {
       if (child instanceof THREE.Mesh) for (const material of Array.isArray(child.material) ? child.material : [child.material]) (material as THREE.MeshStandardMaterial).wireframe = enabled;
     });
+    this.scheduleRender();
   }
   snapshot(size?: number) {
     this.renderer.render(this.scene, this.camera);
@@ -100,7 +109,8 @@ export class HeadViewer {
     return this.renderer.domElement.toDataURL('image/png');
   }
   dispose() {
-    cancelAnimationFrame(this.frame); this.observer.disconnect(); this.controls.dispose();
+    if (this.frame) cancelAnimationFrame(this.frame);
+    this.frame = 0; this.observer.disconnect(); this.controls.removeEventListener('change', this.scheduleRender); this.controls.dispose();
     if (this.object) disposeObject(this.object);
     this.renderer.dispose(); this.renderer.domElement.remove();
   }

@@ -7,7 +7,7 @@ import { addOralCavity } from './oral-cavity';
 import { lowerLipRim, mouthSurfaceTriangles, upperLipRim } from './mouth';
 import { createSkinField, type SkinColorField } from './skin';
 import { smoothHeadSurface, smoothHeadSurfaceFields, type HeadSurface } from './subdivision';
-import type { HeadPart, HeadResult, HeadTemplate, Point2, Point3, ShapeParams, Style } from './types';
+import type { HeadMeasurements, HeadPart, HeadResult, HeadTemplate, Point2, Point3, ShapeParams, Style } from './types';
 
 const smoothstep = (value: number) => {
   const t = clamp(value, 0, 1);
@@ -76,12 +76,19 @@ function computeSmoothNormals(geometry: THREE.BufferGeometry) {
     const area = normal.length();
     if (area < 1e-14) continue;
     normal.multiplyScalar(1 / area);
-    const angles = [Math.atan2(area, ab.dot(ac)), Math.atan2(area, -ab.dot(bc)), Math.atan2(area, ac.dot(bc))];
-    for (const [corner, vertex] of [ia, ib, ic].entries()) {
-      normals[vertex * 3] += normal.x * angles[corner];
-      normals[vertex * 3 + 1] += normal.y * angles[corner];
-      normals[vertex * 3 + 2] += normal.z * angles[corner];
-    }
+    const angleA = Math.atan2(area, ab.dot(ac));
+    const angleB = Math.atan2(area, -ab.dot(bc));
+    const angleC = Math.atan2(area, ac.dot(bc));
+    const offsetA = ia * 3, offsetB = ib * 3, offsetC = ic * 3;
+    normals[offsetA] += normal.x * angleA;
+    normals[offsetA + 1] += normal.y * angleA;
+    normals[offsetA + 2] += normal.z * angleA;
+    normals[offsetB] += normal.x * angleB;
+    normals[offsetB + 1] += normal.y * angleB;
+    normals[offsetB + 2] += normal.z * angleB;
+    normals[offsetC] += normal.x * angleC;
+    normals[offsetC + 1] += normal.y * angleC;
+    normals[offsetC + 2] += normal.z * angleC;
   }
   for (let vertex = 0; vertex < position.count; vertex++) {
     const offset = vertex * 3;
@@ -101,10 +108,30 @@ interface NaturalHead {
   identity: Point3[];
   neutral: Point3[];
   cage: HeadSurface;
-  surface: HeadSurface;
 }
 
-function buildNaturalHead(template: HeadTemplate, params: ShapeParams): NaturalHead {
+function measuredContourScale(vertical: number, measurements?: HeadMeasurements): number {
+  if (!measurements) return 1;
+  const profile = [
+    [0, measurements.chinScale],
+    [0.08, measurements.lowerJawScale],
+    [0.18, measurements.jawScale],
+    [0.48, measurements.cheekScale],
+    [0.66, 1],
+    [0.92, measurements.foreheadScale],
+    [1, measurements.foreheadScale],
+  ] as const;
+  for (let index = 1; index < profile.length; index++) {
+    const [end, endScale] = profile[index];
+    if (vertical <= end) {
+      const [start, startScale] = profile[index - 1];
+      return lerp(startScale, endScale, clamp((vertical - start) / (end - start), 0, 1));
+    }
+  }
+  return measurements.foreheadScale;
+}
+
+function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measurements?: HeadMeasurements, includeOralCavity = true): NaturalHead {
   const canonicalCount = template.canonicalCount;
   if (
     canonicalCount !== 468 || template.positions.length < canonicalCount ||
@@ -118,7 +145,9 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams): NaturalH
   const positions = [...facePositions];
   const parts: HeadPart[] = Array(canonicalCount).fill('face');
   const uv: Point2[] = template.uv.slice(0, canonicalCount).map(([u, v]) => [u, v]);
-  const triangles = mouthSurfaceTriangles(template.triangles.slice(0, template.faceTriangleCount));
+  const triangles = includeOralCavity
+    ? mouthSurfaceTriangles(template.triangles.slice(0, template.faceTriangleCount))
+    : template.triangles.slice(0, template.faceTriangleCount);
   const faceTriangleCount = triangles.length;
   const skinFade = Array(canonicalCount).fill(0) as number[];
   const boundary = template.boundary;
@@ -220,8 +249,9 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams): NaturalH
     const [upperY, upperZ, lowerY, lowerZ, widthScale, detail] = profile[row];
     const width = halfWidth * widthScale;
     const ring = contour.map(({ lateral, vertical, residual }, index) => {
+      const measuredScale = measuredContourScale(vertical, measurements);
       const point: Point3 = [
-        width * lateral + residual[0] * detail,
+        width * lateral * measuredScale + residual[0] * detail,
         lerp(lowerY, upperY, vertical) + residual[1] * detail,
         lerp(lowerZ, upperZ, vertical) + residual[2] * detail,
       ];
@@ -256,7 +286,7 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams): NaturalH
 
   const mouthRim = [...upperLipRim, ...lowerLipRim.slice(1, -1).reverse()];
   const cage: HeadSurface = { positions: relaxNapeCage(positions, triangles, canonicalCount, lastProfile[0], headScale), parts, uv, triangles, skinFade, faceTriangleCount, mouthRim };
-  return { identity, neutral, cage, surface: smoothHeadSurface(cage) };
+  return { identity, neutral, cage };
 }
 
 function applySkinColors(geometry: THREE.BufferGeometry, skinAt: SkinColorField) {
@@ -280,12 +310,10 @@ function createPhotoTexture(atlas: Uint8ClampedArray, size: number) {
   return texture;
 }
 
-function addExpressionTargets(geometry: THREE.BufferGeometry, natural: NaturalHead, rig: ExpressionRigAsset, boundary: number[]) {
-  const basePosition = geometry.getAttribute('position'), baseNormal = geometry.getAttribute('normal');
-  const positions: THREE.BufferAttribute[] = [], normals: THREE.BufferAttribute[] = [];
+function buildExpressionCages(natural: NaturalHead, rig: ExpressionRigAsset, boundary: number[]) {
   const faceDeltas = retargetExpressionDeltas(rig, natural.identity, natural.cage.triangles.slice(0, natural.cage.faceTriangleCount));
   const mouthY = (natural.neutral[13][1] + natural.neutral[14][1]) * 0.5;
-  const deltaCages = expressionControls.map(([name]) => {
+  return expressionControls.map(([name]) => {
     const deltaCage = natural.cage.positions.map((): Point3 => [0, 0, 0]);
     for (let id = 0; id < natural.identity.length; id++) {
       deltaCage[id] = faceDeltas[name][id];
@@ -300,27 +328,36 @@ function addExpressionTargets(geometry: THREE.BufferGeometry, natural: NaturalHe
     }
     return deltaCage;
   });
-  // Subdivision is linear: subdivide all facial displacement fields over the
-  // existing cage and share its topology, rather than rebuilding the skull six times.
-  const deltaSurfaces = smoothHeadSurfaceFields(natural.cage, deltaCages).fields;
+}
+
+function addExpressionTargets(geometry: THREE.BufferGeometry, surface: HeadSurface, deltaSurfaces: Point3[][]) {
+  const basePosition = geometry.getAttribute('position'), baseNormal = geometry.getAttribute('normal');
+  const positions: THREE.BufferAttribute[] = [], normals: THREE.BufferAttribute[] = [];
   for (const [targetIndex, [name]] of expressionControls.entries()) {
     const deltaSurface = deltaSurfaces[targetIndex];
-    const targetPositions = natural.surface.positions.map((point, id): Point3 => [
-      point[0] + expressionIntensityMultiplier * deltaSurface[id][0],
-      point[1] + expressionIntensityMultiplier * deltaSurface[id][1],
-      point[2] + expressionIntensityMultiplier * deltaSurface[id][2],
-    ]);
+    const targetPositions = new Float32Array(surface.positions.length * 3);
+    for (let id = 0; id < surface.positions.length; id++) {
+      const offset = id * 3, point = surface.positions[id], delta = deltaSurface[id];
+      targetPositions[offset] = (point[0] + expressionIntensityMultiplier * delta[0]) * 0.01;
+      targetPositions[offset + 1] = (point[1] + expressionIntensityMultiplier * delta[1]) * 0.01;
+      targetPositions[offset + 2] = (point[2] + expressionIntensityMultiplier * delta[2]) * 0.01;
+    }
     const target = new THREE.BufferGeometry();
-    target.setAttribute('position', new THREE.Float32BufferAttribute(targetPositions.flatMap(meters), 3));
-    target.setIndex(natural.surface.triangles.flat());
+    target.setAttribute('position', new THREE.BufferAttribute(targetPositions, 3));
+    target.setIndex(geometry.getIndex());
     computeSmoothNormals(target);
     const position = target.getAttribute('position'), normal = target.getAttribute('normal');
     const positionDelta = new Float32Array(position.count * 3), normalDelta = new Float32Array(position.count * 3);
     for (let id = 0; id < position.count; id++) {
-      positionDelta.set([position.getX(id) - basePosition.getX(id), position.getY(id) - basePosition.getY(id), position.getZ(id) - basePosition.getZ(id)].map((value) => value / expressionIntensityMultiplier), id * 3);
+      const offset = id * 3;
+      positionDelta[offset] = (position.getX(id) - basePosition.getX(id)) / expressionIntensityMultiplier;
+      positionDelta[offset + 1] = (position.getY(id) - basePosition.getY(id)) / expressionIntensityMultiplier;
+      positionDelta[offset + 2] = (position.getZ(id) - basePosition.getZ(id)) / expressionIntensityMultiplier;
       // Bake normals at the actual maximum. Extrapolating 1x normals at a 2x
       // weight can turn the thin lip rims black even when positions are valid.
-      normalDelta.set([normal.getX(id) - baseNormal.getX(id), normal.getY(id) - baseNormal.getY(id), normal.getZ(id) - baseNormal.getZ(id)].map((value) => value / expressionIntensityMultiplier), id * 3);
+      normalDelta[offset] = (normal.getX(id) - baseNormal.getX(id)) / expressionIntensityMultiplier;
+      normalDelta[offset + 1] = (normal.getY(id) - baseNormal.getY(id)) / expressionIntensityMultiplier;
+      normalDelta[offset + 2] = (normal.getZ(id) - baseNormal.getZ(id)) / expressionIntensityMultiplier;
     }
     const positionAttribute = new THREE.Float32BufferAttribute(positionDelta, 3);
     const normalAttribute = new THREE.Float32BufferAttribute(normalDelta, 3);
@@ -427,12 +464,30 @@ function addEars(group: THREE.Group, head: THREE.Mesh, source: EarTemplate, para
   }
 }
 
-export function createHead(template: HeadTemplate, ears: EarTemplate, rig: ExpressionRigAsset, result?: HeadResult, params: ShapeParams = {}, style: Style = 'natural', strength = 0.5, flat = false) {
+export interface HeadBuildOptions {
+  includeExpressions?: boolean;
+  includeEars?: boolean;
+  includeOralCavity?: boolean;
+}
+
+export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: ExpressionRigAsset, result?: HeadResult, params: ShapeParams = {}, style: Style = 'natural', strength = 0.5, flat = false, options: HeadBuildOptions = {}) {
   const group = new THREE.Group();
   group.name = 'headAsset';
   const effective = styledParams(params, style, strength);
-  const natural = buildNaturalHead(template, effective);
-  const generated = natural.surface;
+  const includeExpressions = options.includeExpressions ?? Boolean(rig);
+  const includeEars = options.includeEars ?? Boolean(ears);
+  const includeOralCavity = options.includeOralCavity ?? Boolean(rig);
+  const natural = buildNaturalHead(template, effective, result?.fit.measurements, includeOralCavity);
+  let generated: HeadSurface;
+  let deltaSurfaces: Point3[][] = [];
+  if (includeExpressions && rig) {
+    // Geometry and all six morph fields share one subdivision pass/topology.
+    const subdivided = smoothHeadSurfaceFields(natural.cage, buildExpressionCages(natural, rig, template.boundary));
+    generated = subdivided.surface;
+    deltaSurfaces = subdivided.fields;
+  } else {
+    generated = smoothHeadSurface(natural.cage);
+  }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(generated.positions.flatMap(meters), 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(generated.uv.flat(), 2));
@@ -444,7 +499,7 @@ export function createHead(template: HeadTemplate, ears: EarTemplate, rig: Expre
   geometry.addGroup(0, generated.faceTriangleCount * 3, 0);
   geometry.addGroup(generated.faceTriangleCount * 3, (generated.triangles.length - generated.faceTriangleCount) * 3, 1);
   computeSmoothNormals(geometry);
-  addExpressionTargets(geometry, natural, rig, template.boundary);
+  if (includeExpressions && rig) addExpressionTargets(geometry, generated, deltaSurfaces);
 
   let texture: THREE.CanvasTexture | undefined;
   if (result?.atlas && !flat) texture = createPhotoTexture(result.atlas, result.atlasSize);
@@ -458,9 +513,21 @@ export function createHead(template: HeadTemplate, ears: EarTemplate, rig: Expre
   group.add(mesh);
 
   const halfWidth = Math.max(...template.boundary.map((id) => Math.abs(generated.positions[id][0])));
-  addEars(group, mesh, ears, effective, skinMaterial, halfWidth, skinAt);
-  addOralCavity(group, geometry, rig, generated.mouthRim!, natural.identity);
-  group.userData = { generator: 'portrait-head-lab-procedural', schemaVersion: 1, expressionSet, units: 'metres', forward: '+Z', up: '+Y', style, shapeParams: { ...effective }, rigged: false };
+  if (includeEars && ears) {
+    // Ear fitting only needs the control cage. Raycasting against the refined
+    // render mesh multiplies triangle tests by the Loop subdivision factor.
+    const fitGeometry = new THREE.BufferGeometry();
+    fitGeometry.setAttribute('position', new THREE.Float32BufferAttribute(natural.cage.positions.flatMap(meters), 3));
+    fitGeometry.setIndex(natural.cage.triangles.flat());
+    fitGeometry.computeVertexNormals();
+    const fitMaterial = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+    const fitSurface = new THREE.Mesh(fitGeometry, fitMaterial);
+    fitSurface.updateMatrixWorld(true);
+    addEars(group, fitSurface, ears, effective, skinMaterial, halfWidth, skinAt);
+    fitGeometry.dispose(); fitMaterial.dispose();
+  }
+  if (includeOralCavity && rig) addOralCavity(group, geometry, rig, generated.mouthRim!, natural.identity);
+  group.userData = { generator: 'portrait-head-lab-procedural', schemaVersion: 1, expressionSet: includeExpressions && rig ? expressionSet : undefined, units: 'metres', forward: '+Z', up: '+Y', style, shapeParams: { ...effective }, headMeasurements: result?.fit.measurements, rigged: false };
   return group;
 }
 

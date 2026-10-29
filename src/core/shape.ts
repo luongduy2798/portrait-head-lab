@@ -18,6 +18,10 @@ export const shapeControls = [
 export const manualKeys = ['faceWidth', 'jawWidth', 'chinLength', 'eyeSpacing', 'eyeOpening', 'eyeTilt', 'browHeight', 'browArch', 'noseWidth', 'noseTip', 'mouthWidth', 'lipFullness'];
 export const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const gaussian = (value: number, center: number, width: number) => Math.exp(-(((value - center) / width) ** 2));
+const smoothstep = (value: number) => {
+  const t = clamp(value, 0, 1);
+  return t * t * (3 - 2 * t);
+};
 
 /** Smooth, symmetric, bounded procedural bases. All deltas use the neutral
  * point, so changing a style/slider cannot accumulate deformation. */
@@ -47,7 +51,11 @@ export function deformPoint(point: Point3, part: HeadTemplate['parts'][number], 
     const lowerJaw = gaussian(y, -8, 3);
     return [x + x * (0.025 * p('faceWidth') + 0.04 * p('jawWidth') * lowerJaw), y + 0.12 * p('faceLength'), z];
   }
-  let dx = x * 0.12 * p('faceWidth');
+  // Narrow/widen the outer contour without scaling the eyes with it. A uniform
+  // X scale is canceled by camera fitting to interocular distance, so it cannot
+  // reliably fit the actual face width from landmarks.
+  const outerFaceWeight = smoothstep((Math.abs(x) - 4.2) / 3.5);
+  let dx = x * 0.20 * p('faceWidth') * outerFaceWeight;
   let dy = y * 0.1 * p('faceLength');
   let dz = 0;
   const front = part === 'face' ? 1 : part === 'cranium' ? 0.3 : 0;

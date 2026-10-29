@@ -1,51 +1,104 @@
 import { clamp, deformPoint, project, shapeControls } from './shape';
 import { eyeVisibility, landmarkVisibility, maskAt } from './visibility';
-import type { Analysis, Anchor, CameraFit, FitResult, GenerationOptions, HeadTemplate, Point3, ShapeParams } from './types';
+import type { Analysis, Anchor, CameraFit, FitResult, GenerationOptions, HeadMeasurements, HeadTemplate, Point3, ShapeParams } from './types';
 
 const fittingLandmarks = [10, 21, 54, 67, 103, 109, 127, 162, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323, 454, 356, 389, 251, 284, 332, 297, 338, 33, 133, 159, 145, 263, 362, 386, 374, 70, 63, 105, 66, 107, 336, 296, 334, 293, 300, 1, 2, 4, 5, 6, 98, 327, 168, 195, 61, 291, 0, 17, 13, 14, 78, 308, 50, 280, 101, 330];
 const stableLandmarks = new Set([33, 133, 263, 362, 1, 2, 4, 5, 6, 98, 327, 168, 195]);
 const huber = (residual: number) => residual < 0.025 ? residual * residual / 2 : 0.025 * (residual - 0.0125);
 
+function localizeLandmarks(points: Point3[], width: number, height: number) {
+  const scaled = points.map(([x, y]) => [x * width, y * height] as const);
+  const leftEye = scaled[33], rightEye = scaled[263];
+  const angle = Math.atan2(rightEye[1] - leftEye[1], rightEye[0] - leftEye[0]);
+  const cosine = Math.cos(angle), sine = Math.sin(angle);
+  return scaled.map(([x, y]) => [x * cosine + y * sine, -x * sine + y * cosine] as const);
+}
+
+function measureFaceProportions(analysis: Analysis, template: HeadTemplate, params: ShapeParams): HeadMeasurements {
+  const imageWidth = analysis.maskWidth > 0 ? analysis.maskWidth : 1;
+  const imageHeight = analysis.maskHeight > 0 ? analysis.maskHeight : 1;
+  const observed = localizeLandmarks(analysis.landmarks, imageWidth, imageHeight);
+  const fittedPositions = template.positions.slice(0, template.canonicalCount)
+    .map((point, index) => deformPoint(point, template.parts[index], params));
+  const canonical = localizeLandmarks(fittedPositions, 1, 1);
+  const widthAt = (points: readonly (readonly [number, number])[], a: number, b: number) => Math.abs(points[a][0] - points[b][0]);
+  const heightAt = (points: readonly (readonly [number, number])[]) => Math.abs(points[152][1] - points[10][1]);
+  const safeRatio = (numerator: number, denominator: number) => denominator > 1e-6 ? numerator / denominator : 1;
+  const scale = (observedRatio: number, canonicalRatio: number) => clamp(safeRatio(observedRatio, canonicalRatio), 0.72, 1.28);
+  const widths = (points: readonly (readonly [number, number])[]) => ({
+    temple: widthAt(points, 127, 356),
+    forehead: (widthAt(points, 54, 284) + widthAt(points, 103, 332)) * 0.5,
+    cheek: widthAt(points, 234, 454),
+    jaw: widthAt(points, 172, 397),
+    lowerJaw: widthAt(points, 150, 379),
+    chin: widthAt(points, 148, 377),
+  });
+  const actual = widths(observed), base = widths(canonical);
+  const actualTemple = Math.max(actual.temple, 1e-6), baseTemple = Math.max(base.temple, 1e-6);
+  const actualCheek = Math.max(actual.cheek, 1e-6);
+  return {
+    faceAspectRatio: safeRatio(heightAt(observed), actualCheek),
+    // Ratios are measured relative to each person's temple width, then
+    // normalized against the canonical mesh. 1 means no shape correction.
+    foreheadScale: scale(safeRatio(actual.forehead, actualTemple), safeRatio(base.forehead, baseTemple)),
+    cheekScale: scale(safeRatio(actual.cheek, actualTemple), safeRatio(base.cheek, baseTemple)),
+    jawScale: scale(safeRatio(actual.jaw, actualTemple), safeRatio(base.jaw, baseTemple)),
+    lowerJawScale: scale(safeRatio(actual.lowerJaw, actualTemple), safeRatio(base.lowerJaw, baseTemple)),
+    chinScale: scale(safeRatio(actual.chin, actualTemple), safeRatio(base.chin, baseTemple)),
+  };
+}
+
 /** Infer the visible head proportions from local segmentation. The back of
  * the skull remains a conservative prior because a single frontal photo does
  * not contain enough evidence to recover its true depth. */
-function inferHeadGeometry(analysis: Analysis): ShapeParams {
+function inferHeadGeometry(analysis: Analysis, template: HeadTemplate, fittedParams: ShapeParams): { params: ShapeParams; measurements: HeadMeasurements } {
   const { landmarks, maskWidth, maskHeight, hair, skin, bodySkin } = analysis;
-  if (maskWidth < 2 || maskHeight < 2 || hair.length < maskWidth * maskHeight || skin.length < maskWidth * maskHeight) return {};
+  const measurements = measureFaceProportions(analysis, template, fittedParams);
+  if (maskWidth < 2 || maskHeight < 2 || hair.length < maskWidth * maskHeight || skin.length < maskWidth * maskHeight) return { params: {}, measurements };
 
   const faceTop = landmarks[10][1], chinY = landmarks[152][1];
   const faceHeight = chinY - faceTop;
   const faceWidth = Math.abs(landmarks[454][0] - landmarks[234][0]);
   const centerX = (landmarks[33][0] + landmarks[263][0]) * 0.5;
-  if (faceHeight < 0.05 || faceWidth < 0.05) return {};
+  if (faceHeight < 0.05 || faceWidth < 0.05) return { params: {}, measurements };
 
   const sample = (mask: Float32Array, x: number, y: number) => maskAt(mask, analysis, x, y);
   // The model separates face skin from body skin. Use the latter for neck
   // measurements so face-only segmentation does not silently disable them.
   const neckMask = bodySkin && bodySkin.length >= maskWidth * maskHeight ? bodySkin : skin;
+  const headConfidence = (x: number, y: number) => Math.max(sample(hair, x, y), sample(skin, x, y), sample(neckMask, x, y));
   const inferred: ShapeParams = {};
 
   // Use a band rather than a single pixel so a centre part or a stray hair
   // does not decide the crown height. A top clipped by the crop is ignored.
-  const crownOffsets = [-0.12, -0.06, 0, 0.06, 0.12];
+  const crownOffsets = [-0.08, -0.04, 0, 0.04, 0.08];
   const crownStep = Math.max(1 / maskHeight, faceHeight / 160);
-  const crownStart = Math.max(0.015, faceTop - faceHeight * 0.82);
+  // Ignore implausibly distant mask hits above the scalp. Segmentation can
+  // leak skin confidence into the background, especially around bright crops.
+  const crownStart = Math.max(0.015, faceTop - faceHeight * 0.62);
   const crownEnd = faceTop - faceHeight * 0.06;
+  const hasCrownSupport = (y: number) => {
+    const values = crownOffsets.map((offset) => headConfidence(centerX + faceWidth * offset, y));
+    return values.filter((value) => value > 0.22).length >= 2
+      && values.reduce((sum, value) => sum + value, 0) / values.length > 0.16;
+  };
   let crownTop: number | undefined;
   for (let y = crownStart; y <= crownEnd; y += crownStep) {
-    const values = crownOffsets.map((offset) => sample(hair, centerX + faceWidth * offset, y));
-    if (values.filter((value) => value > 0.18).length >= 2 && values.reduce((sum, value) => sum + value, 0) / values.length > 0.12) {
+    // Require a short continuous run instead of trusting one noisy mask row.
+    if (y + crownStep * 2 <= crownEnd
+      && hasCrownSupport(y)
+      && hasCrownSupport(y + crownStep)
+      && hasCrownSupport(y + crownStep * 2)) {
       crownTop = y;
       break;
     }
   }
-  if (crownTop !== undefined && crownTop > 0.04) {
+  if (crownTop !== undefined) {
     const crownRatio = (faceTop - crownTop) / faceHeight;
-    // The base profile already builds a natural crown about 0.22 face-heights
-    // above the forehead. Only add a restrained correction for the measured
-    // silhouette; using the old 0.18/0.20 mapping stacked a second tall crown
-    // on top of that base and made the whole head look stretched.
-    if (crownRatio >= 0.12 && crownRatio <= 0.78) inferred.craniumHeight = clamp((crownRatio - 0.22) / 0.28, -1, 1);
+    measurements.crownHeightRatio = crownRatio;
+    // Keep the measured ratio for diagnostics, but do not automatically alter
+    // craniumHeight. The neutral procedural profile already provides the
+    // normal crown; adding a second image-derived offset can make heads too tall.
   }
 
   // The union of hair and skin gives a rough visible silhouette around the
@@ -58,7 +111,7 @@ function inferHeadGeometry(analysis: Analysis): ShapeParams {
       // Do not let maskAt's edge clamping turn a crop boundary into a false
       // continuation of the head or neck silhouette.
       if (x < 0.01 || x > 0.99) break;
-      const confidence = hairAndSkin ? Math.max(sample(hair, x, y), sample(skin, x, y)) : sample(neckMask, x, y);
+      const confidence = hairAndSkin ? headConfidence(x, y) : sample(neckMask, x, y);
       if (confidence > 0.22) { distance = offset; gap = 0; }
       else {
         gap += extentStep;
@@ -85,6 +138,7 @@ function inferHeadGeometry(analysis: Analysis): ShapeParams {
     const observedRatio = headWidthRatios.length % 2
       ? headWidthRatios[middle]
       : (headWidthRatios[middle - 1] + headWidthRatios[middle]) * 0.5;
+    measurements.headWidthToFaceRatio = observedRatio;
     inferred.craniumWidth = clamp((observedRatio - 1.04) / 0.20, -1, 1);
   }
 
@@ -95,6 +149,7 @@ function inferHeadGeometry(analysis: Analysis): ShapeParams {
   if (neckY < 0.94 && sample(neckMask, centerX, neckY) > 0.3) {
     const left = extent(-1, neckY, false), right = extent(1, neckY, false);
     const ratio = (left + right) / faceWidth;
+    measurements.neckWidthToFaceRatio = ratio;
     if (ratio >= 0.24 && ratio <= 0.90) inferred.neckWidth = clamp((ratio - 0.62) / 0.12, -1, 1);
 
     if (neckStart < 0.94 && [-0.035, 0, 0.035].every((offset) => sample(neckMask, centerX + faceWidth * offset, neckStart) > 0.22)) {
@@ -110,7 +165,12 @@ function inferHeadGeometry(analysis: Analysis): ShapeParams {
       }
       if (lastSkinY < 0.93) {
         const visibleLength = (lastSkinY - chinY) / faceHeight;
-        if (visibleLength >= 0.20 && visibleLength <= 0.62) inferred.neckLength = clamp((visibleLength - 0.34) / 0.18, -1, 1);
+        measurements.neckLengthToFaceRatio = visibleLength;
+        if (visibleLength >= 0.20 && visibleLength <= 0.62) {
+          // The mask may include clothing/shoulder pixels. Limit its influence
+          // because the procedural neck already has a substantial base length.
+          inferred.neckLength = clamp((visibleLength - 0.34) / 0.30, -0.65, 0.45);
+        }
       }
     }
   }
@@ -119,7 +179,7 @@ function inferHeadGeometry(analysis: Analysis): ShapeParams {
   // automatically push the occiput backward; that made the side profile too
   // long. Use only a weak width prior for the unseen depth.
   inferred.craniumDepth = clamp(0.35 * (inferred.craniumWidth ?? 0), -1, 1);
-  return inferred;
+  return { params: inferred, measurements };
 }
 
 export function fitHead(template: HeadTemplate, anchors: Anchor[], analysis: Analysis, options: GenerationOptions = { occludedEyes: false }): FitResult {
@@ -175,7 +235,6 @@ export function fitHead(template: HeadTemplate, anchors: Anchor[], analysis: Ana
     return value / weights + prior + expressionLoss;
   };
   let best = loss(), iterations = 0;
-  const started = performance.now();
   // Identity basis bounds provide the bound term; symmetric Gaussian bases
   // provide symmetry and smoothness by construction. No per-vertex fitting.
   const optimize = (object: Record<string, number>, key: string, step: number, min: number, max: number) => {
@@ -189,9 +248,12 @@ export function fitHead(template: HeadTemplate, anchors: Anchor[], analysis: Ana
     object[key] = picked;
   };
   let stale = 0;
-  for (let round = 0; round < 28; round++) {
+  // Use a fixed work budget. A wall-clock cutoff made the fitted faceLength
+  // depend on CPU/cache speed, so identical photos could produce different
+  // head proportions before and after a page refresh.
+  for (let round = 0; round < 16; round++) {
     const before = best;
-    const decay = round < 7 ? 1 : round < 16 ? 0.45 : 0.18;
+    const decay = round < 4 ? 1 : round < 10 ? 0.45 : 0.18;
     for (let repeat = 0; repeat < 2; repeat++) {
       optimize(camera, 'tx', eyeDistance * 0.02 * decay, -1, 2);
       optimize(camera, 'ty', eyeDistance * 0.02 * decay, -1, 2);
@@ -206,9 +268,10 @@ export function fitHead(template: HeadTemplate, anchors: Anchor[], analysis: Ana
     for (const key of Object.keys(expression)) optimize(expression, key, 0.1 * decay, 0, 1);
     iterations++;
     stale = before - best < 1e-9 ? stale + 1 : 0;
-    if (stale >= 4 || performance.now() - started > 2400) break;
+    if (stale >= 4) break;
   }
-  Object.assign(params, inferHeadGeometry(analysis));
+  const inferred = inferHeadGeometry(analysis, template, params);
+  Object.assign(params, inferred.params);
   const projected = template.positions.slice(0, template.canonicalCount).map((point, vertex) => project(deformPoint(point, template.parts[vertex], params, expression), camera));
   const squared = fitting.reduce((sum, { id }) => sum + landmarkWeights[id] * ((projected[id][0] - observed[id][0]) ** 2 + (projected[id][1] - observed[id][1]) ** 2), 0);
   const normalizedError = Math.sqrt(squared / fitting.reduce((sum, { id }) => sum + landmarkWeights[id], 0)) / eyeDistance;
@@ -218,5 +281,5 @@ export function fitHead(template: HeadTemplate, anchors: Anchor[], analysis: Ana
   if (Math.abs(camera.ry) > 0.35 || Math.abs(camera.rx) > 0.35) warnings.push('Ảnh nghiêng nhiều: vùng khuất dùng hình dạng mẫu. Nên thử ảnh gần chính diện.');
   if (expression.jawOpen > 0.25) warnings.push('Miệng mở: đầu xuất về trạng thái trung tính; texture môi có thể còn biểu cảm.');
   if (normalizedError > 0.08) warnings.push('Sai số khớp còn cao. Thử crop sát mặt, ảnh thẳng hoặc chỉnh các thanh hình học.');
-  return { params, expression, camera, projected, normalizedError, iterations, landmarkWeights, warnings };
+  return { params, measurements: inferred.measurements, expression, camera, projected, normalizedError, iterations, landmarkWeights, warnings };
 }

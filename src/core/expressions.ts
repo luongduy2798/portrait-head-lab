@@ -17,16 +17,22 @@ export const legacyExpressionControls = [
 export type ExpressionName = typeof expressionControls[number][0];
 export type ExpressionSelection = ExpressionName | typeof legacyExpressionControls[number][0] | 'neutral';
 export const expressionIntensityMultiplier = 2;
+const allExpressionNames = [...expressionControls, ...legacyExpressionControls].map(([name]) => name);
+const profileCache = new WeakMap<THREE.Object3D, 'mobile' | 'legacy' | undefined>();
 
 function profile(object?: THREE.Object3D): 'mobile' | 'legacy' | undefined {
+  if (!object) return undefined;
+  if (profileCache.has(object)) return profileCache.get(object);
   let mobile = false, legacy = false;
-  object?.traverse((child) => {
+  object.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
     const dictionary = child.morphTargetDictionary;
     if (expressionControls.every(([name]) => dictionary?.[name] !== undefined)) mobile = true;
     if (legacyExpressionControls.every(([name]) => dictionary?.[name] !== undefined)) legacy = true;
   });
-  return mobile ? 'mobile' : legacy ? 'legacy' : undefined;
+  const detected = mobile ? 'mobile' : legacy ? 'legacy' : undefined;
+  profileCache.set(object, detected);
+  return detected;
 }
 
 export function controlsForObject(object?: THREE.Object3D) {
@@ -57,7 +63,7 @@ export function applyExpression(object: THREE.Object3D, selected: ExpressionSele
   const gain = mobile ? expressionIntensityMultiplier : 1;
   object.traverse((child) => {
     if (!(child instanceof THREE.Mesh) || !child.morphTargetInfluences || !child.morphTargetDictionary) return;
-    for (const [id] of [...expressionControls, ...legacyExpressionControls]) {
+    for (const id of allExpressionNames) {
       const index = child.morphTargetDictionary[id];
       if (index !== undefined) child.morphTargetInfluences[index] = id === name ? amount * gain : 0;
     }
@@ -101,6 +107,14 @@ function facialFrame(points: readonly Point3[]) {
   return { basis: new THREE.Matrix3().set(x.x, y.x, z.x, x.y, y.y, z.y, x.z, y.z, z.z), width, height };
 }
 
+const retargetCache = new WeakMap<ExpressionRigAsset, Array<{ key: string; deltas: Record<ExpressionName, Point3[]> }>>();
+const retargetTopologyCache = new WeakMap<ExpressionRigAsset, {
+  key: string;
+  source: THREE.Vector3[];
+  neighbors: Set<number>[];
+  sourceNormals: THREE.Vector3[];
+}>();
+
 /** A common resting mouth frame places the dental arches and tongue. The same
  * transform is used on every source pose, preserving native jaw alignment. */
 export function mouthTransform(source: readonly Point3[], target: readonly Point3[]) {
@@ -122,17 +136,36 @@ export function mouthTransform(source: readonly Point3[], target: readonly Point
  * constraint supplies depth where surface neighbors alone are nearly planar.
  * No face geometry from FaceVerse replaces the fitted identity. */
 export function retargetExpressionDeltas(rig: ExpressionRigAsset, identity: Point3[], triangles: [number, number, number][]) {
-  const source = rig.landmarks.map((point) => new THREE.Vector3(...point));
+  const topologyKey = triangles.map((triangle) => triangle.join(',')).join(';');
+  const key = `${identity.map((point) => point.join(',')).join(';')}|${topologyKey}`;
+  const cached = retargetCache.get(rig);
+  const cachedIndex = cached?.findIndex((entry) => entry.key === key) ?? -1;
+  if (cached && cachedIndex >= 0) {
+    const [entry] = cached.splice(cachedIndex, 1);
+    cached.unshift(entry);
+    return entry.deltas;
+  }
+  let topology = retargetTopologyCache.get(rig);
+  if (!topology || topology.key !== topologyKey) {
+    const source = rig.landmarks.map((point) => new THREE.Vector3(...point));
+    const neighbors = source.map(() => new Set<number>());
+    const sourceNormals = source.map(() => new THREE.Vector3());
+    const normal = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3();
+    for (const [i, j, k] of triangles) {
+      neighbors[i].add(j).add(k); neighbors[j].add(i).add(k); neighbors[k].add(i).add(j);
+      normal.crossVectors(a.subVectors(source[j], source[i]), b.subVectors(source[k], source[i]));
+      for (const id of [i, j, k]) sourceNormals[id].add(normal);
+    }
+    topology = { key: topologyKey, source, neighbors, sourceNormals };
+    retargetTopologyCache.set(rig, topology);
+  }
+  const { source, neighbors, sourceNormals } = topology;
   const destination = identity.map((point) => new THREE.Vector3(...point));
-  const neighbors = source.map(() => new Set<number>());
-  const sourceNormals = source.map(() => new THREE.Vector3()), targetNormals = source.map(() => new THREE.Vector3());
+  const targetNormals = source.map(() => new THREE.Vector3());
   const normal = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3();
   for (const [i, j, k] of triangles) {
-    neighbors[i].add(j).add(k); neighbors[j].add(i).add(k); neighbors[k].add(i).add(j);
-    for (const [points, normals] of [[source, sourceNormals], [destination, targetNormals]] as const) {
-      normal.crossVectors(a.subVectors(points[j], points[i]), b.subVectors(points[k], points[i]));
-      for (const id of [i, j, k]) normals[id].add(normal);
-    }
+    normal.crossVectors(a.subVectors(destination[j], destination[i]), b.subVectors(destination[k], destination[i]));
+    for (const id of [i, j, k]) targetNormals[id].add(normal);
   }
   const from = facialFrame(rig.landmarks), to = facialFrame(identity);
   const scale = Math.sqrt(to.width * to.height / Math.max(1e-8, from.width * from.height));
@@ -178,11 +211,16 @@ export function retargetExpressionDeltas(rig: ExpressionRigAsset, identity: Poin
     1 - THREE.MathUtils.smootherstep(point.y, mouthY + upperHeight * 0.15, source[2].y),
     lipDistances[id] <= 1 ? 1 : lipDistances[id] === 2 ? 0.75 : lipDistances[id] === 3 ? 0.25 : 0,
   ));
-  return Object.fromEntries(expressionControls.map(([name]) => [name,
+  const deltas = Object.fromEntries(expressionControls.map(([name]) => [name,
     rig.deltas[name].map((delta, id): Point3 => {
       const local = new THREE.Vector3(...delta).applyMatrix3(transforms[id]);
       const mouth = new THREE.Vector3(...delta).applyMatrix3(mouthLinear);
       return local.lerp(mouth, mouthWeights[id]).toArray() as Point3;
     }),
   ])) as Record<ExpressionName, Point3[]>;
+  const entries = cached ?? [];
+  entries.unshift({ key, deltas });
+  if (entries.length > 2) entries.length = 2;
+  retargetCache.set(rig, entries);
+  return deltas;
 }

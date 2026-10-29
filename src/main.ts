@@ -69,7 +69,10 @@ let params: ShapeParams = {};
 let currentStyle: Style = 'natural';
 let currentExpression: ExpressionSelection = 'neutral';
 let hasPhoto = false, busy = false, exporting = false, imported = false;
+let photoLoading = false, photoPickerOpen = false;
 let renderTimer = 0;
+let generationSequence = 0;
+let generationAssets: Promise<void> | undefined;
 const timings: Array<Record<string, number>> = [];
 const history: Array<{ source: string; front: string; quarter: string; back: string; error: number }> = [];
 let lifecycle = 0;
@@ -78,27 +81,48 @@ function showError(message?: string) { element('error').textContent = message ??
 function setBusy(value: boolean) {
   busy = value;
   if (value) { window.clearTimeout(renderTimer); renderTimer = 0; }
-  button('generate').disabled = value || exporting || !hasPhoto || !viewer || !template || !ears || !expressionRig;
-  input('portrait').disabled = value || exporting;
-  input('glb').disabled = value || exporting;
-  for (const id of ['zoom', 'rotate']) input(id).disabled = value || exporting || !hasPhoto;
-  button('reset-crop').disabled = value || exporting || !hasPhoto;
-  element('crop').style.pointerEvents = value || exporting ? 'none' : 'auto';
+  const locked = value || exporting || photoLoading;
+  button('generate').disabled = locked || !hasPhoto || !viewer || !template;
+  input('portrait').disabled = locked;
+  input('glb').disabled = locked;
+  for (const id of ['zoom', 'rotate']) input(id).disabled = locked || !hasPhoto;
+  button('reset-crop').disabled = locked || !hasPhoto;
+  element('crop').style.pointerEvents = locked ? 'none' : 'auto';
   element('progress-area').hidden = !value;
-  for (const id of ['export', 'screenshot']) button(id).disabled = value || !result && !imported || !viewer || exporting;
+  for (const id of ['export', 'screenshot']) button(id).disabled = locked || !result && !imported || !viewer;
   document.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-style], #strength, #flat, #sliders input, #reset-shape').forEach((control) => {
-    control.disabled = value || exporting || imported || control.matches('#sliders input, #reset-shape') && !result;
+    control.disabled = control.id === 'strength'
+      ? locked || imported || currentStyle === 'natural'
+      : locked || imported || control.matches('#sliders input, #reset-shape') && !result;
   });
   updateExpressionControls();
 }
-function refreshMesh(fit = !viewer?.getHead()) {
-  if (!template || !ears || !expressionRig || !viewer || imported) return;
-  const head = createHead(template, ears, expressionRig, result, params, currentStyle, Number(input('strength').value), input('flat').checked);
+function refreshMesh(fit = !viewer?.getHead(), previewOnly = false) {
+  if (!template || !viewer || imported) return;
+  const personalized = Boolean(result);
+  const includeEars = personalized && Boolean(ears);
+  const includeOralCavity = personalized && Boolean(expressionRig);
+  const preserveExpression = currentExpression !== 'neutral' && Number(input('expression-strength').value) > 0;
+  const includeExpressions = includeEars && includeOralCavity && (!previewOnly || preserveExpression);
+  const head = createHead(template, ears, expressionRig, result, params, currentStyle, Number(input('strength').value), input('flat').checked, {
+    includeEars, includeOralCavity, includeExpressions,
+  });
   if (!expressionControls.some(([name]) => name === currentExpression)) currentExpression = 'neutral';
-  applyExpression(head, currentExpression, Number(input('expression-strength').value));
+  if (supportsExpressions(head)) applyExpression(head, currentExpression, Number(input('expression-strength').value));
   viewer.setHead(head, fit);
   viewer.wireframe(input('wireframe').checked);
   updateExpressionControls();
+}
+function ensureGenerationAssets() {
+  if (ears && expressionRig) return Promise.resolve();
+  generationAssets ??= Promise.all([loadEarTemplate(), loadExpressionRig()]).then(([earTemplate, rig]) => {
+    ears = earTemplate;
+    expressionRig = rig;
+  }).catch((error) => {
+    generationAssets = undefined;
+    throw error;
+  });
+  return generationAssets;
 }
 function updateExpressionControls() {
   const available = supportsExpressions(viewer?.getHead());
@@ -110,10 +134,10 @@ function updateExpressionControls() {
   }
   document.querySelectorAll<HTMLButtonElement>('[data-expression]').forEach((control) => {
     const active = control.dataset.expression === currentExpression;
-    control.disabled = busy || exporting || !available;
+    control.disabled = busy || exporting || photoLoading || !available;
     control.classList.toggle('active', active); control.setAttribute('aria-pressed', String(active));
   });
-  input('expression-strength').disabled = busy || exporting || !available || currentExpression === 'neutral';
+  input('expression-strength').disabled = busy || exporting || photoLoading || !available || currentExpression === 'neutral';
   element('expression-hint').textContent = imported && !available ? 'GLB này chưa có dữ liệu để chỉnh sáu biểu cảm.' : 'Chọn biểu cảm rồi kéo mức độ để điều chỉnh.';
 }
 element('expression-options').addEventListener('click', (event) => {
@@ -123,6 +147,7 @@ element('expression-options').addEventListener('click', (event) => {
   if (!head || busy || exporting || !supportsExpressions(head)) return;
   currentExpression = control.dataset.expression as ExpressionSelection;
   applyExpression(head, currentExpression, Number(input('expression-strength').value));
+  viewer?.render();
   updateExpressionControls();
 });
 input('expression-strength').addEventListener('input', () => {
@@ -130,6 +155,7 @@ input('expression-strength').addEventListener('input', () => {
   if (!head || busy || exporting) return;
   element<HTMLOutputElement>('expression-value').value = `${Math.round(Number(input('expression-strength').value) * 100)}%`;
   applyExpression(head, currentExpression, Number(input('expression-strength').value));
+  viewer?.render();
 });
 function vertexCount() {
   let count = 0;
@@ -138,11 +164,11 @@ function vertexCount() {
   });
   return count;
 }
-function scheduleMesh(delay = 120) {
+function scheduleMesh(delay = 220, previewOnly = false) {
   window.clearTimeout(renderTimer);
   renderTimer = window.setTimeout(() => {
     renderTimer = 0;
-    refreshMesh(false);
+    refreshMesh(false, previewOnly);
   }, delay);
 }
 
@@ -152,7 +178,7 @@ for (const key of manualKeys) {
   const caption = document.createElement('span'); caption.textContent = title;
   const value = document.createElement('output'); value.textContent = '0.00';
   const slider = document.createElement('input'); slider.type = 'range'; slider.min = '-1'; slider.max = '1'; slider.step = '0.01'; slider.value = '0'; slider.disabled = true; slider.dataset.key = key;
-  slider.addEventListener('input', () => { params[key] = Number(slider.value); value.value = Number(slider.value).toFixed(2); scheduleMesh(); });
+  slider.addEventListener('input', () => { params[key] = Number(slider.value); value.value = Number(slider.value).toFixed(2); scheduleMesh(220, true); });
   slider.addEventListener('change', () => scheduleMesh(0));
   label.append(caption, value, slider); element('sliders').append(label);
 }
@@ -166,7 +192,9 @@ function updateSliders() {
 button('reset-shape').addEventListener('click', () => { if (result) { params = { ...result.fit.params }; updateSliders(); scheduleMesh(0); } });
 
 async function selectPhoto(file?: File) {
-  if (!file || busy || exporting) return;
+  if (!file || busy || exporting || photoLoading) return;
+  photoLoading = true;
+  setBusy(busy);
   showError();
   try {
     if (!await cropper.load(file)) return;
@@ -175,9 +203,22 @@ async function selectPhoto(file?: File) {
     element('filename').textContent = file.name;
     input('zoom').value = '1'; input('rotate').value = '0'; setBusy(false);
   } catch (error) { showError(error instanceof Error ? error.message : 'Không đọc được ảnh.'); }
-  finally { input('portrait').value = ''; }
+  finally {
+    photoLoading = false;
+    photoPickerOpen = false;
+    input('portrait').value = '';
+    setBusy(busy);
+  }
 }
-input('portrait').addEventListener('change', () => void selectPhoto(input('portrait').files?.[0]));
+input('portrait').addEventListener('click', (event) => {
+  if (photoPickerOpen || busy || exporting || photoLoading) { event.preventDefault(); return; }
+  photoPickerOpen = true;
+});
+input('portrait').addEventListener('change', () => {
+  photoPickerOpen = false;
+  void selectPhoto(input('portrait').files?.[0]);
+});
+window.addEventListener('focus', () => { photoPickerOpen = false; });
 const dropzone = element('dropzone');
 dropzone.addEventListener('dragover', (event) => { event.preventDefault(); dropzone.classList.add('dragging'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragging'));
@@ -220,13 +261,20 @@ function drawDiagnostics(crop: HTMLCanvasElement, detected: Analysis, generated:
 }
 
 button('generate').addEventListener('click', async () => {
-  if (!viewer || busy || exporting) return;
+  if (!viewer || busy || exporting || photoLoading) return;
   const token = lifecycle;
+  const request = ++generationSequence;
   showError(); setBusy(true);
   try {
+    if (!ears || !expressionRig) {
+      element('phase').textContent = 'Đang tải tài nguyên 3D…';
+      element<HTMLProgressElement>('progress').value = 0.04;
+      await ensureGenerationAssets();
+      if (token !== lifecycle || request !== generationSequence) return;
+    }
     const crop = cropper.capture();
     const generated = await pipeline.generate(crop, ({ phase, progress }) => { element('phase').textContent = phase; element<HTMLProgressElement>('progress').value = progress; });
-    if (token !== lifecycle) return;
+    if (token !== lifecycle || request !== generationSequence) return;
     result = generated.result; analysis = generated.analysis; template = generated.template;
     imported = false; params = { ...result.fit.params }; currentExpression = 'neutral';
     timings.push({ ...result.timings }); if (timings.length > 100) timings.shift();
@@ -239,9 +287,14 @@ button('generate').addEventListener('click', async () => {
     if (result.fit.warnings.length) showError(result.fit.warnings.join(' '));
   } catch (error) {
     if (!(error instanceof DOMException && error.name === 'AbortError')) showError(error instanceof Error ? error.message : 'Không thể dựng đầu 3D.');
-  } finally { setBusy(false); }
+  } finally { if (request === generationSequence) setBusy(false); }
 });
-button('cancel').addEventListener('click', () => { pipeline.cancel(); element('phase').textContent = 'Đã hủy'; });
+button('cancel').addEventListener('click', () => {
+  ++generationSequence;
+  pipeline.cancel();
+  element('phase').textContent = 'Đã hủy';
+  setBusy(false);
+});
 
 document.querySelectorAll<HTMLButtonElement>('[data-angle]').forEach((control) => control.addEventListener('click', () => {
   viewer?.angle(control.dataset.angle as 'front' | 'quarter' | 'back');
@@ -250,11 +303,16 @@ document.querySelectorAll<HTMLButtonElement>('[data-angle]').forEach((control) =
 button('spin').addEventListener('click', () => { const enabled = button('spin').getAttribute('aria-pressed') !== 'true'; button('spin').setAttribute('aria-pressed', String(enabled)); viewer?.rotation(enabled); });
 document.querySelectorAll<HTMLButtonElement>('[data-style]').forEach((control) => control.addEventListener('click', () => {
   if (imported) { showError('GLB đang mở đã được bake. Hãy dựng từ ảnh để đổi hình học.'); return; }
-  currentStyle = control.dataset.style as Style;
-  document.querySelectorAll('[data-style]').forEach((item) => item.classList.toggle('active', item === control)); scheduleMesh(0);
+  const nextStyle = control.dataset.style as Style;
+  if (nextStyle === currentStyle) return;
+  currentStyle = nextStyle;
+  document.querySelectorAll('[data-style]').forEach((item) => item.classList.toggle('active', item === control));
+  input('strength').disabled = busy || exporting || photoLoading || imported || currentStyle === 'natural';
+  scheduleMesh(0);
 }));
-input('strength').addEventListener('input', () => scheduleMesh()); input('strength').addEventListener('change', () => scheduleMesh(0));
-input('flat').addEventListener('change', () => updateFlatAppearance(viewer?.getHead(), input('flat').checked));
+input('strength').addEventListener('input', () => { if (currentStyle !== 'natural') scheduleMesh(220, true); });
+input('strength').addEventListener('change', () => { if (currentStyle !== 'natural') scheduleMesh(0); });
+input('flat').addEventListener('change', () => { updateFlatAppearance(viewer?.getHead(), input('flat').checked); viewer?.render(); });
 input('wireframe').addEventListener('change', () => viewer?.wireframe(input('wireframe').checked));
 
 button('export').addEventListener('click', async () => {
@@ -307,20 +365,20 @@ async function initialize() {
   try {
     if (!window.Worker || !window.WebAssembly || !window.createImageBitmap || !window.OffscreenCanvas) throw new Error('Bản thử cần Worker, WebAssembly và OffscreenCanvas. Hãy dùng trình duyệt mới.');
     viewer = new HeadViewer(element('viewer'));
-    const [loaded, earTemplate, rig] = await Promise.all([loadTemplate(), loadEarTemplate(), loadExpressionRig()]);
+    const loaded = await loadTemplate();
     if (token !== lifecycle) return;
     template = loaded.template;
-    ears = earTemplate;
-    expressionRig = rig;
-    refreshMesh();
+    // Show a lightweight head immediately; expensive ears and six expression
+    // targets are only built after the user asks for a personalized head.
+    refreshMesh(true, true);
     element('model-status').textContent = 'Mesh đầu–cổ tự sinh';
-    element('result-summary').textContent = `Mesh mẫu tự sinh · ${vertexCount().toLocaleString('vi')} đỉnh · chọn ảnh để cá nhân hóa`;
+    element('result-summary').textContent = `Mesh mẫu xem nhanh · ${vertexCount().toLocaleString('vi')} đỉnh · chọn ảnh để cá nhân hóa`;
     setBusy(false);
   } catch (error) { showError(error instanceof Error ? error.message : 'Không khởi động được preview WebGL.'); }
 }
 void initialize();
 window.addEventListener('pagehide', () => {
-  ++lifecycle; pipeline.dispose(); cropper.dispose(); viewer?.dispose();
+  ++lifecycle; ++generationSequence; pipeline.dispose(); cropper.dispose(); viewer?.dispose();
   window.clearTimeout(renderTimer); renderTimer = 0; history.length = 0; element('history').replaceChildren(); result = undefined; analysis = undefined;
   const overlay = element<HTMLCanvasElement>('overlay'); overlay.getContext('2d')?.clearRect(0, 0, overlay.width, overlay.height);
 });
