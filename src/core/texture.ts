@@ -158,20 +158,6 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
     ry: Math.max(eyeDistance * 0.1, Math.abs(analysis.landmarks[brow][1] - analysis.landmarks[lower][1]) * height * 0.72),
   }));
   const inEyeDetails = (x: number, y: number) => eyeDetails.some((eye) => ((x - eye.x) / eye.rx) ** 2 + ((y - eye.y) / eye.ry) ** 2 <= 1);
-  const bridgeX = (analysis.landmarks[133][0] + analysis.landmarks[362][0]) * width * 0.5;
-  const bridgeY = (analysis.landmarks[133][1] + analysis.landmarks[362][1]) * height * 0.5;
-  let hasEyewear = false;
-  for (let row = 0; row < 11 && !hasEyewear; row++) {
-    let dark = 0;
-    for (let column = 0; column < 7; column++) {
-      const x = bridgeX + (column / 6 - 0.5) * eyeDistance * 0.09;
-      const y = bridgeY + (row / 10 * 0.14 - 0.08) * eyeDistance;
-      const lightAt = (offset: number) => luminance(photo(x, y + offset, 0), photo(x, y + offset, 1), photo(x, y + offset, 2));
-      const light = lightAt(0), surround = Math.max(lightAt(-eyeDistance * 0.045), lightAt(eyeDistance * 0.045));
-      if (light < surround * 0.72 && surround - light > 12) dark++;
-    }
-    hasEyewear = dark >= 6;
-  }
   for (let y = 0; y < confidenceSize; y++) for (let x = 0; x < confidenceSize; x++) {
     const u = (x + 0.5) / confidenceSize, v = (y + 0.5) / confidenceSize;
     let inside = false;
@@ -330,15 +316,30 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
         const depthConfidence = 1 - oblique * (1 - depthVisibility(depth, depthSize, px / width * depthSize, py / height * depthSize, z));
         const sourceInset = bilinear(sourceDistance, confidenceSize, confidenceSize, px / width * confidenceSize - 0.5, py / height * confidenceSize - 0.5);
         let eyewear = inEyeDetails(px, py);
-        if (!eyewear && hasEyewear && inEyewear(px, py)) {
-          // In the wider band, preserve dark frames rather than every pixel:
-          // a broad unconditional rectangle can also keep background foliage.
+        if (!eyewear && inEyewear(px, py)) {
+          // The glasses rim is often thicker than the eye landmarks, so the
+          // eye ellipses alone leave parts of the frame under the skin blend.
+          // Compare at several scales: a single nearby sample can still land
+          // inside a thick black rim and incorrectly classify it as skin.
           const red = photo(px, py, 0), green = photo(px, py, 1), blue = photo(px, py, 2);
           const light = luminance(red, green, blue);
-          const above = [0, 1, 2].map((channel) => photo(px, py - eyeDistance * 0.035, channel)) as Point3;
-          const below = [0, 1, 2].map((channel) => photo(px, py + eyeDistance * 0.035, channel)) as Point3;
-          const contrast = Math.max(luminance(...above), luminance(...below)) - light;
-          eyewear = light < skinLuma * 0.75 && contrast > Math.max(10, skinLuma * 0.1) && green <= Math.max(red, blue) + 8;
+          let surroundingMin = Infinity, surroundingMax = -Infinity;
+          for (const distance of [0.035, 0.055, 0.075].map((scale) => eyeDistance * scale)) {
+            for (const [dx, dy] of [[-distance, 0], [distance, 0], [0, -distance], [0, distance]]) {
+              const neighbor = luminance(photo(px + dx, py + dy, 0), photo(px + dx, py + dy, 1), photo(px + dx, py + dy, 2));
+              surroundingMin = Math.min(surroundingMin, neighbor);
+              surroundingMax = Math.max(surroundingMax, neighbor);
+            }
+          }
+          const darkRim = light < skinLuma * 0.8
+            && surroundingMax - light > Math.max(8, skinLuma * 0.07)
+            && green <= Math.max(red, blue) + 12;
+          // Keep small neutral reflections on glossy black frames too; these
+          // are lost if only dark pixels bypass the skin-colour blend.
+          const brightReflection = light > skinLuma * 1.18
+            && light - surroundingMin > Math.max(12, skinLuma * 0.09)
+            && (Math.max(red, green, blue) - Math.min(red, green, blue)) / Math.max(1, red, green, blue) < 0.35;
+          eyewear = darkRim || brightReflection;
         }
         // The geometric face outline already excludes the background. Skin
         // semantics must not erase makeup, dark skin or a thin glasses arm.
