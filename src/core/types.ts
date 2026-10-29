@@ -67,6 +67,12 @@ export interface HeadResult {
   fit: FitResult;
   atlas: Uint8ClampedArray | null;
   atlasSize: number;
+  /** Forehead-derived texture projected onto the generated crown and front scalp. */
+  scalpSkinMap: Float32Array | null;
+  scalpSkinMapSize: number;
+  /** Forehead-derived skin texture tiled for the rear skull, neck and nape. */
+  rearSkinMap: Float32Array | null;
+  rearSkinMapSize: number;
   skinColor: [number, number, number];
   skinDarkColor: [number, number, number];
   skinLightColor: [number, number, number];

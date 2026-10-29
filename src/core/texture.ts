@@ -61,6 +61,36 @@ function boundaryDistance(point: Point2, boundary: Point2[]): number {
   return distance;
 }
 
+/** Recover the refined face edge so the photo feather follows the actual UV
+ * boundary produced by subdivision, not the coarser template polygon. */
+function surfaceBoundaryLoop(triangles: [number, number, number][], startHint: number): number[] {
+  const edges = new Map<string, { a: number; b: number; count: number }>();
+  for (const [a, b, c] of triangles) for (const [from, to] of [[a, b], [b, c], [c, a]]) {
+    const key = from < to ? `${from}:${to}` : `${to}:${from}`;
+    const edge = edges.get(key);
+    if (edge) edge.count++;
+    else edges.set(key, { a: from, b: to, count: 1 });
+  }
+  const adjacent = new Map<number, number[]>();
+  for (const { a, b, count } of edges.values()) {
+    if (count !== 1) continue;
+    adjacent.set(a, [...(adjacent.get(a) ?? []), b]);
+    adjacent.set(b, [...(adjacent.get(b) ?? []), a]);
+  }
+  const first = adjacent.get(startHint);
+  if (!first?.length) return [];
+  const loop = [startHint];
+  let previous = startHint, current = first[0];
+  while (current !== startHint && loop.length <= adjacent.size) {
+    loop.push(current);
+    const next = (adjacent.get(current) ?? []).find((id) => id !== previous);
+    if (next === undefined) return [];
+    previous = current;
+    current = next;
+  }
+  return current === startHint ? loop : [];
+}
+
 /** Low-frequency photo colour for a colour-only seam transition. Normalize
  * over the face outline to exclude background but retain observed shadows;
  * add image detail back separately rather than fading glasses with skin. */
@@ -121,6 +151,181 @@ function padAtlas(atlas: Uint8ClampedArray, covered: Uint8Array, size: number) {
   }
 }
 
+/** Build unseen-skin texture from a real, central forehead crop. The extended
+ * UV map contains nearest-pixel fills which become streaks when tiled. */
+function buildRearSkinMap(
+  pixels: Uint8ClampedArray,
+  imageWidth: number,
+  imageHeight: number,
+  foreheadRect: { left: number; right: number; top: number; bottom: number },
+  size: number,
+  base: Point3,
+  skinSamples: SkinSample[],
+) {
+  const rectWidth = Math.max(1, foreheadRect.right - foreheadRect.left);
+  const rectHeight = Math.max(1, foreheadRect.bottom - foreheadRect.top);
+  const patchSide = clamp(Math.round(Math.min(rectWidth, rectHeight) * 0.72), 32, Math.min(imageWidth - 2, imageHeight - 2));
+  const centerX = (foreheadRect.left + foreheadRect.right) * 0.5;
+  const centerY = (foreheadRect.top + foreheadRect.bottom) * 0.5;
+  const left = clamp(centerX - patchSide * 0.5, 0, imageWidth - patchSide);
+  const top = clamp(centerY - patchSide * 0.5, 0, imageHeight - patchSide);
+  const patchSize = Math.max(32, Math.ceil(patchSide));
+  const patch = new Float32Array(patchSize * patchSize * 4);
+  for (let y = 0; y < patchSize; y++) for (let x = 0; x < patchSize; x++) {
+    const sourceX = left + patchSide * (x + 0.5) / patchSize;
+    const sourceY = top + patchSide * (y + 0.5) / patchSize;
+    const offset = (y * patchSize + x) * 4;
+    for (let channel = 0; channel < 3; channel++) {
+      patch[offset + channel] = srgbToLinear(bilinear(pixels, imageWidth, imageHeight, sourceX, sourceY, 4, channel));
+    }
+    patch[offset + 3] = 1;
+  }
+
+  const averageRegion = (regions: SkinSample['region'][]): Point3 => {
+    const samples = skinSamples.filter((sample) => regions.includes(sample.region));
+    if (!samples.length) return [...base];
+    return [0, 1, 2].map((channel) => samples.reduce(
+      (sum, sample) => sum + srgbToLinear(sample.color[channel]), 0,
+    ) / samples.length) as Point3;
+  };
+  const foreheadTone = averageRegion(['forehead']);
+  const templeTone = averageRegion(['left-temple', 'right-temple']);
+  const cheekTone = averageRegion(['left-cheek', 'right-cheek']);
+  const jawTone = averageRegion(['jaw']);
+  const smooth = (low: number, high: number, value: number) => {
+    const t = clamp((value - low) / (high - low), 0, 1);
+    return t * t * (3 - 2 * t);
+  };
+  const mixColor = (a: Point3, b: Point3, weight: number): Point3 =>
+    a.map((value, channel) => value * (1 - weight) + b[channel] * weight) as Point3;
+  const toneAt = (u: number, v: number): Point3 => {
+    let front = mixColor(jawTone, cheekTone, smooth(0.2, 0.48, v));
+    front = mixColor(front, foreheadTone, smooth(0.62, 0.82, v));
+    let side = mixColor(jawTone, cheekTone, smooth(0.2, 0.44, v));
+    side = mixColor(side, templeTone, smooth(0.42, 0.68, v));
+    side = mixColor(side, foreheadTone, smooth(0.74, 0.92, v) * 0.25);
+    const frontness = smooth(0, 1, clamp(1 - Math.abs(u - 0.5) * 4, 0, 1));
+    return mixColor(side, front, frontness);
+  };
+
+  // Remove broad forehead highlights/shadows before tiling. Keeping only the
+  // high-frequency residual preserves real skin texture without repeating the
+  // bright specular stripe across the crown and nape.
+  const reflect = (coordinate: number, length: number) => {
+    const period = length * 2;
+    const wrapped = ((coordinate % period) + period) % period;
+    return wrapped < length ? wrapped : period - 1 - wrapped;
+  };
+  // Remove lighting gradients but keep fine pore detail at its source scale.
+  const blurRadius = clamp(Math.round(patchSize * 0.1), 3, 8);
+  const windowSize = blurRadius * 2 + 1;
+  const horizontal = new Float32Array(patch.length), blurred = new Float32Array(patch.length);
+  for (let y = 0; y < patchSize; y++) for (let x = 0; x < patchSize; x++) for (let channel = 0; channel < 3; channel++) {
+    let sum = 0;
+    for (let tap = -blurRadius; tap <= blurRadius; tap++) sum += patch[(y * patchSize + reflect(x + tap, patchSize)) * 4 + channel];
+    horizontal[(y * patchSize + x) * 4 + channel] = sum / windowSize;
+  }
+  for (let y = 0; y < patchSize; y++) for (let x = 0; x < patchSize; x++) for (let channel = 0; channel < 3; channel++) {
+    let sum = 0;
+    for (let tap = -blurRadius; tap <= blurRadius; tap++) sum += horizontal[(reflect(y + tap, patchSize) * patchSize + x) * 4 + channel];
+    blurred[(y * patchSize + x) * 4 + channel] = sum / windowSize;
+  }
+  const rearSkinMap = new Float32Array(size * size * 4);
+  // A single continuous crop avoids the vertical seams caused by tiled rows
+  // and columns; subtle detail is preferable to a repeated pore pattern.
+  const repeatsX = 1;
+  // Use one vertical pass. Repeating a small forehead crop in rows creates
+  // visible horizontal bands across the crown and down the neck.
+  const repeatsY = 1;
+  const tileWidth = size / repeatsX, tileHeight = size / repeatsY;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const tileX = Math.floor(x / tileWidth), tileY = Math.floor(y / tileHeight);
+    const localX = (x + 0.5 - tileX * tileWidth) / tileWidth;
+    const localY = (y + 0.5 - tileY * tileHeight) / tileHeight;
+    const sampleX = tileX % 2 === 0 ? localX : 1 - localX;
+    const sampleY = tileY % 2 === 0 ? localY : 1 - localY;
+    const targetOffset = (y * size + x) * 4;
+    const regionalTone = toneAt((x + 0.5) / size, 1 - (y + 0.5) / size);
+    for (let channel = 0; channel < 3; channel++) {
+      const sample = bilinear(patch, patchSize, patchSize, sampleX * patchSize - 0.5, sampleY * patchSize - 0.5, 4, channel);
+      const lowFrequency = bilinear(blurred, patchSize, patchSize, sampleX * patchSize - 0.5, sampleY * patchSize - 0.5, 4, channel);
+      // Keep the forehead's real pore texture visible on the unseen skull.
+      // Do not reintroduce low-frequency forehead lighting: it tiled into
+      // orange patches on the crown and bright vertical folds down the neck.
+      const detail = clamp(sample - lowFrequency, -0.012, 0.012);
+      rearSkinMap[targetOffset + channel] = clamp(regionalTone[channel] + detail * 0.12, 0, 1);
+    }
+    rearSkinMap[targetOffset + 3] = 1;
+  }
+
+  // The cylindrical map wraps horizontally. Blend both sides into a common
+  // skin tone so the back-of-head UV seam cannot become a vertical stripe.
+  const original = rearSkinMap.slice();
+  const blendWidth = Math.max(8, Math.round(size * 0.045));
+  for (let y = 0; y < size; y++) for (let x = 0; x < blendWidth; x++) {
+    const t = x / blendWidth, weight = t * t * (3 - 2 * t);
+    const leftOffset = (y * size + x) * 4;
+    const rightOffset = (y * size + size - 1 - x) * 4;
+    const leftInner = (y * size + blendWidth) * 4;
+    const rightInner = (y * size + size - 1 - blendWidth) * 4;
+    for (let channel = 0; channel < 3; channel++) {
+      const edgeColor = (original[leftOffset + channel] + original[rightOffset + channel]) * 0.5;
+      rearSkinMap[leftOffset + channel] = edgeColor * (1 - weight) + original[leftInner + channel] * weight;
+      rearSkinMap[rightOffset + channel] = edgeColor * (1 - weight) + original[rightInner + channel] * weight;
+    }
+  }
+  return rearSkinMap;
+}
+
+/** Extend a selected set of clean photo-skin pixels into nearby unseen areas.
+ * Callers choose the source region; the same soft falloff keeps the extension
+ * from turning into a hard-edged stamp when projected onto the generated head. */
+function buildExtendedSkinMap(
+  size: number,
+  base: Point3,
+  isClean: (u: number, v: number) => boolean,
+  sample: (u: number, v: number) => Point3,
+  extensionRadius = 64,
+) {
+  const map = new Float32Array(size * size * 4);
+  const distance = new Int16Array(size * size).fill(-1);
+  const queue = new Int32Array(size * size);
+  let queueEnd = 0;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const u = (x + 0.5) / size, v = (y + 0.5) / size;
+    const offset = (y * size + x) * 4;
+    const clean = isClean(u, v);
+    const color = clean ? sample(u, v) : base;
+    map[offset] = color[0]; map[offset + 1] = color[1]; map[offset + 2] = color[2]; map[offset + 3] = 1;
+    if (!clean) continue;
+    const index = y * size + x;
+    distance[index] = 0;
+    queue[queueEnd++] = index;
+  }
+  for (let read = 0; read < queueEnd; read++) {
+    const index = queue[read], depth = distance[index];
+    if (depth >= extensionRadius) continue;
+    const x = index % size, y = Math.floor(index / size);
+    const neighbors = [x > 0 ? index - 1 : -1, x + 1 < size ? index + 1 : -1,
+      y > 0 ? index - size : -1, y + 1 < size ? index + size : -1];
+    for (const next of neighbors) {
+      if (next < 0 || distance[next] >= 0) continue;
+      distance[next] = depth + 1;
+      map.set(map.subarray(index * 4, index * 4 + 4), next * 4);
+      queue[queueEnd++] = next;
+    }
+  }
+  for (let index = 0; index < distance.length; index++) {
+    const depth = distance[index];
+    if (depth < 0) continue;
+    const t = clamp((depth - 1) / (extensionRadius - 1), 0, 1);
+    const fade = 1 - t * t * (3 - 2 * t);
+    const offset = index * 4;
+    for (let channel = 0; channel < 3; channel++) map[offset + channel] = map[offset + channel] * fade + base[channel] * (1 - fade);
+  }
+  return { map, distance };
+}
+
 export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: Analysis, pixels: Uint8ClampedArray, width: number, height: number, size = 1024) {
   const mask = (values: Float32Array, x: number, y: number) => bilinear(values, analysis.maskWidth, analysis.maskHeight, x / width * analysis.maskWidth, y / height * analysis.maskHeight);
   const photo = (x: number, y: number, channel: number) => bilinear(pixels, width, height, x, y, 4, channel);
@@ -132,6 +337,8 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
     (analysis.landmarks[33][0] - analysis.landmarks[263][0]) * width,
     (analysis.landmarks[33][1] - analysis.landmarks[263][1]) * height,
   );
+  const frontalCenterX = (analysis.landmarks[33][0] + analysis.landmarks[263][0]) * width * 0.5;
+  const frontalSampleHalfWidth = eyeDistance * 1.3;
   const sampleRadius = clamp(Math.round(eyeDistance * 0.09), 5, 18);
   // The observed face outline includes glasses, eyebrows and facial hair.
   // Semantic skin segmentation must not punch holes through those details.
@@ -158,6 +365,27 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
     ry: Math.max(eyeDistance * 0.1, Math.abs(analysis.landmarks[brow][1] - analysis.landmarks[lower][1]) * height * 0.72),
   }));
   const inEyeDetails = (x: number, y: number) => eyeDetails.some((eye) => ((x - eye.x) / eye.rx) ** 2 + ((y - eye.y) / eye.ry) ** 2 <= 1);
+  const noseX = analysis.landmarks[4][0] * width, noseY = analysis.landmarks[4][1] * height;
+  const mouthX = (analysis.landmarks[61][0] + analysis.landmarks[291][0]) * width * 0.5;
+  const mouthYCenter = (analysis.landmarks[13][1] + analysis.landmarks[14][1]) * height * 0.5;
+  const mouthRadiusX = Math.abs(analysis.landmarks[61][0] - analysis.landmarks[291][0]) * width * 0.65;
+  const featurePreserveWeight = (x: number, y: number) => {
+    const eyeWeight = Math.max(...eyeDetails.map((eye) => 1 - feather(0.72, 1.2,
+      Math.hypot((x - eye.x) / eye.rx, (y - eye.y) / eye.ry))));
+    const noseWeight = 1 - feather(0.72, 1.2, Math.hypot(
+      (x - noseX) / (eyeDistance * 0.28), (y - noseY) / (eyeDistance * 0.4),
+    ));
+    const mouthWeight = 1 - feather(0.72, 1.2, Math.hypot(
+      (x - mouthX) / mouthRadiusX, (y - mouthYCenter) / (eyeDistance * 0.22),
+    ));
+    return Math.max(eyeWeight, noseWeight, mouthWeight);
+  };
+  const foreheadLeft = analysis.landmarks[127][0] * width - eyeDistance * 0.02;
+  const foreheadRight = analysis.landmarks[356][0] * width + eyeDistance * 0.02;
+  const foreheadTop = analysis.landmarks[10][1] * height;
+  const foreheadBottom = browY * height - eyeDistance * 0.06;
+  const inForehead = (x: number, y: number) => x >= foreheadLeft && x <= foreheadRight
+    && y >= foreheadTop && y <= foreheadBottom && !inEyeSampling(x, y) && !inEyeDetails(x, y);
   for (let y = 0; y < confidenceSize; y++) for (let x = 0; x < confidenceSize; x++) {
     const u = (x + 0.5) / confidenceSize, v = (y + 0.5) / confidenceSize;
     let inside = false;
@@ -193,7 +421,11 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
       const x = u * width + dx, y = v * height + dy;
       const color = [0, 1, 2].map((c) => photo(x, y, c));
       const luma = luminance(color[0], color[1], color[2]);
-      if (!inEyeSampling(x, y) && mask(analysis.skin, x, y) > 0.72 && mask(analysis.hair, x, y) < 0.25 && luma > 12 && luma < 238) {
+      // Estimate pigment from the visible frontal face, not the dark outer
+      // cheek/temple pixels where the source photo's side lighting falls off.
+      if (Math.abs(x - frontalCenterX) <= frontalSampleHalfWidth
+        && !inEyeSampling(x, y) && mask(analysis.skin, x, y) > 0.72
+        && mask(analysis.hair, x, y) < 0.25 && luma > 12 && luma < 238) {
         color.forEach((value, c) => colors[c].push(value));
         const saturation = (Math.max(...color) - Math.min(...color)) / Math.max(1, ...color);
         pixelSkinSamples.push({ color: color as [number, number, number], light: luma, saturation });
@@ -204,8 +436,8 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
   const orderedLight = [...pixelSkinSamples].sort((a, b) => a.light - b.light);
   const orderedSaturation = pixelSkinSamples.map((sample) => sample.saturation).sort((a, b) => a - b);
   const quantile = (values: number[], fraction: number) => values[Math.min(values.length - 1, Math.floor(values.length * fraction))];
-  const diffuseLow = orderedLight[Math.floor(orderedLight.length * 0.2)].light;
-  const diffuseHigh = orderedLight[Math.floor(orderedLight.length * 0.65)].light;
+  const diffuseLow = orderedLight[Math.floor(orderedLight.length * 0.28)].light;
+  const diffuseHigh = orderedLight[Math.floor(orderedLight.length * 0.62)].light;
   const minimumSaturation = quantile(orderedSaturation, 0.7) * 0.85;
   // Specular skin is brighter and less saturated; neutral dark hair/frames
   // are not a pigment estimate either. Keep observed midtone skin pixels.
@@ -245,7 +477,10 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
       const color = [0, 1, 2].map((channel) => photo(x, y, channel));
       const luma = luminance(color[0], color[1], color[2]);
       const skin = mask(analysis.skin, x, y), hair = mask(analysis.hair, x, y);
-      if (skin <= 0.72 || hair >= 0.25 || luma <= Math.max(28, skinLuma * 0.55) || luma >= 238) continue;
+      // Ignore broad source-photo shadows when building the spatial skin
+      // palette. They are lighting, not a pigment difference to bake onto a
+      // cheek that must remain readable as the 3D head turns.
+      if (skin <= 0.72 || hair >= 0.25 || luma <= Math.max(28, skinLuma * 0.78) || luma >= 238) continue;
       // Dark, nearly neutral beard pixels can be labelled as face skin.
       // Do not let them turn the neck grey when extending the skin palette.
       const saturation = (Math.max(...color) - Math.min(...color)) / Math.max(1, ...color);
@@ -261,6 +496,39 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
   const mouthY = analysis.landmarks[13][1] * height;
   const beardLeft = analysis.landmarks[61][0] * width - eyeDistance * 0.2;
   const beardRight = analysis.landmarks[291][0] * width + eyeDistance * 0.2;
+  // Keep a general clean-skin map for face-seam blending, but derive the actual
+  // scalp/rear texture only from the clean forehead: it has the most consistent
+  // skin tone and avoids tiling cheeks, eyes or other facial details onto the head.
+  const skinColorMapSize = 512;
+  const foreheadSamples = skinSamples.filter((sample) => sample.region === 'forehead').map((sample) => sample.color);
+  const foreheadTone = [0, 1, 2].map((channel) => foreheadSamples.length
+    ? trimmedMean(foreheadSamples.map((color) => color[channel]), 0.2)
+    : skinColor[channel]) as Point3;
+  // The unseen head should inherit the forehead's real pigment and texture,
+  // while the measured diffuse face tone keeps highlights from bleaching it.
+  const fallbackLinear = [0, 1, 2].map((channel) =>
+    srgbToLinear(skinColor[channel]) * 0.75 + srgbToLinear(foreheadTone[channel]) * 0.25,
+  ) as Point3;
+  const sampleSkin = (u: number, v: number): Point3 => [0, 1, 2].map((channel) => srgbToLinear(photo(u * width, v * height, channel))) as Point3;
+  const isCleanSkin = (u: number, v: number) => {
+    const px = u * width, py = v * height;
+    const faceInset = bilinear(sourceDistance, confidenceSize, confidenceSize, u * confidenceSize - 0.5, v * confidenceSize - 0.5);
+    const skinConfidence = mask(analysis.skin, px, py), hairConfidence = mask(analysis.hair, px, py);
+    return faceInset >= -24 && skinConfidence > 0.72 && hairConfidence < 0.25
+      && !inEyeSampling(px, py) && !inEyeDetails(px, py);
+  };
+  const faceSeamMap = buildExtendedSkinMap(skinColorMapSize, fallbackLinear, isCleanSkin, sampleSkin);
+  const foreheadMap = buildExtendedSkinMap(skinColorMapSize, fallbackLinear,
+    (u, v) => isCleanSkin(u, v) && inForehead(u * width, v * height), sampleSkin, 112);
+  const skinColorMap = faceSeamMap.map;
+  const hasForeheadSkin = foreheadMap.distance.some((distance) => distance === 0);
+  const scalpSkinMap = hasForeheadSkin ? foreheadMap.map : faceSeamMap.map;
+  const rearSkinMap = buildRearSkinMap(pixels, width, height, {
+    left: foreheadLeft + eyeDistance * 0.08,
+    right: foreheadRight - eyeDistance * 0.08,
+    top: foreheadTop + eyeDistance * 0.04,
+    bottom: foreheadBottom - eyeDistance * 0.04,
+  }, skinColorMapSize, fallbackLinear, skinSamples);
   const atlas = new Uint8ClampedArray(size * size * 4);
   const covered = new Uint8Array(size * size);
   for (let i = 0; i < atlas.length; i += 4) {
@@ -281,7 +549,8 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
     faceTriangleCount: faceTriangles.length,
   });
   const posed = surface.positions.map((point) => rotate(point, fit.camera)), photoPoints = surface.photoPoints!;
-  const boundary = template.boundary.map((id) => template.uv[id]);
+  const boundaryIds = surfaceBoundaryLoop(surface.triangles.slice(0, surface.faceTriangleCount), template.boundary[0]);
+  const boundary = (boundaryIds.length ? boundaryIds : template.boundary).map((id) => surface.uv[id]);
   const distances = surface.uv.map((point) => boundaryDistance(point, boundary));
   const skinColors = surface.positions.map(skinAt);
   const normals = surface.positions.map((): Point3 => [0, 0, 0]);
@@ -311,8 +580,8 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
       const py = points[0][1] * a + points[1][1] * b + points[2][1] * c;
       const distance = distances[tri[0]] * a + distances[tri[1]] * b + distances[tri[2]] * c;
       let alpha = 0, detailAlpha = 0;
+      const z = depths[0] * a + depths[1] * b + depths[2] * c;
       if (px >= 0 && py >= 0 && px < width && py < height) {
-        const z = depths[0] * a + depths[1] * b + depths[2] * c;
         const depthConfidence = 1 - oblique * (1 - depthVisibility(depth, depthSize, px / width * depthSize, py / height * depthSize, z));
         const sourceInset = bilinear(sourceDistance, confidenceSize, confidenceSize, px / width * confidenceSize - 0.5, py / height * confidenceSize - 0.5);
         let eyewear = inEyeDetails(px, py);
@@ -355,10 +624,26 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
       }
       const index = (y * size + x) * 4;
       for (let channel = 0; channel < 3; channel++) {
-        const base = skinColors[tri[0]][channel] * a + skinColors[tri[1]][channel] * b + skinColors[tri[2]][channel] * c;
+        const fieldBase = skinColors[tri[0]][channel] * a + skinColors[tri[1]][channel] * b + skinColors[tri[2]][channel] * c;
+        const projectedBase = bilinear(skinColorMap, skinColorMapSize, skinColorMapSize,
+          px / width * skinColorMapSize - 0.5, py / height * skinColorMapSize - 0.5, 4, channel);
+        const seamMix = (1 - feather(0.002, 0.06, distance)) * feather(-8, -1, z);
+        const base = fieldBase * (1 - seamMix) + projectedBase * seamMix;
         const source = detailAlpha > 0 ? srgbToLinear(photo(px, py, channel)) : base;
         const low = bilinear(colorLayer.pixels, colorLayer.size, colorLayer.size, px / width * colorLayer.size - 0.5, py / height * colorLayer.size - 0.5, 4, channel);
-        atlas[index + channel] = linearToSrgb(base * (1 - alpha) + low * alpha + (source - low) * detailAlpha);
+        // Replace low-frequency illumination with the frontal diffuse skin
+        // field, then restore only high-frequency photo detail (pores, makeup,
+        // brows, eyes and lips). This prevents a dark source-photo cheek from
+        // becoming an almost-black patch on a freely rotating 3D head.
+        // Blend feature protection softly; hard masks around eyes or mouth
+        // create abrupt patches where source lighting suddenly returns.
+        const featureWeight = featurePreserveWeight(px, py);
+        const relightStrength = 0.78 * (1 - featureWeight);
+        const detailStrength = 0.32 + 0.68 * featureWeight;
+        const relit = base * relightStrength + low * (1 - relightStrength);
+        atlas[index + channel] = linearToSrgb(
+          base * (1 - alpha) + relit * alpha + (source - low) * detailAlpha * detailStrength,
+        );
       }
       covered[y * size + x] = 1;
       if (alpha > 0.01) painted++;
@@ -366,5 +651,5 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
   }
   if (painted < size * size * 0.02) throw new Error('Vùng mặt dùng được quá ít. Hãy chọn ảnh gần chính diện, không che mặt.');
   padAtlas(atlas, covered, size);
-  return { atlas, atlasSize: size, skinColor, skinDarkColor, skinLightColor, skinSamples, projectedCoverage: painted / (size * size) };
+  return { atlas, atlasSize: size, scalpSkinMap, scalpSkinMapSize: skinColorMapSize, rearSkinMap, rearSkinMapSize: skinColorMapSize, skinColor, skinDarkColor, skinLightColor, skinSamples, projectedCoverage: painted / (size * size) };
 }

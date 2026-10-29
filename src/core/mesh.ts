@@ -1,11 +1,11 @@
 import * as THREE from 'three';
-import { clamp, deformPoint, styledParams } from './shape';
+import { clamp, deformPoint, rotate, styledParams } from './shape';
 import type { EarTemplate } from './ears';
 import { expressionControls, expressionIntensityMultiplier, expressionSet, retargetExpressionDeltas, updateExpressionBounds } from './expressions';
 import type { ExpressionRigAsset } from './expression-rig';
 import { addOralCavity } from './oral-cavity';
 import { lowerLipRim, mouthSurfaceTriangles, upperLipRim } from './mouth';
-import { createSkinField, type SkinColorField } from './skin';
+import { createSkinField, linearToSrgb, srgbToLinear, type SkinColorField } from './skin';
 import { smoothHeadSurface, smoothHeadSurfaceFields, type HeadSurface } from './subdivision';
 import type { HeadMeasurements, HeadPart, HeadResult, HeadTemplate, Point2, Point3, ShapeParams, Style } from './types';
 
@@ -26,6 +26,15 @@ function fairCranialProfile(profile: number[][]): number[][] {
     for (let index = 2; index <= 8; index++) {
       const strength = index === 2 || index === 8 ? 0.18 : 0.28;
       for (const axis of [0, 1]) {
+        const neighborMean = (source[index - 1][axis] + source[index + 1][axis]) * 0.5;
+        result[index][axis] = source[index][axis] + (neighborMean - source[index][axis]) * strength;
+      }
+    }
+    // Fair the throat-facing profile too. Previously only the back-of-skull
+    // coordinates were relaxed, leaving the front neck to pinch between rings.
+    for (let index = 8; index <= 10; index++) {
+      const strength = index === 8 || index === 10 ? 0.18 : 0.28;
+      for (const axis of [2, 3, 4]) {
         const neighborMean = (source[index - 1][axis] + source[index + 1][axis]) * 0.5;
         result[index][axis] = source[index][axis] + (neighborMean - source[index][axis]) * strength;
       }
@@ -208,17 +217,17 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measureme
   // remaining face-contour detail. Dimensions follow the fitted face once.
   const profileBase = [
     [maxY, foreheadZ, minY, chinZ, 1, 1],
-    [maxY + height * 0.11, foreheadZ - 0.95 * headScale, minY - height * 0.015, chinZ - 1.1 * headScale, 1.00, 0.90],
-    [maxY + height * 0.19, foreheadZ - 3.65 * headScale, minY - height * 0.025, chinZ - 2.6 * headScale, 0.96, 0.68],
-    [maxY + height * 0.22, -4.9 * headScale, minY - height * 0.045, chinZ - 3.7 * headScale, 0.91, 0.42],
-    [maxY + height * 0.20, -6.85 * headScale, minY - height * 0.075, chinZ - 4.25 * headScale, 0.88, 0.20],
-    [maxY + height * 0.06, -9.7 * headScale, minY - height * 0.10, chinZ - 4.4 * headScale, 0.81, 0.05],
-    [maxY - height * 0.20, -10.7 * headScale, minY - height * 0.12, chinZ - 4.4 * headScale, 0.71, 0],
-    [maxY - height * 0.50, -9.35 * headScale, minY - height * 0.14, chinZ - 4.3 * headScale, 0.65, 0],
-    [maxY - height * 0.80, -7.3 * headScale, minY - height * 0.16, chinZ - 4.25 * headScale, 0.59, 0],
-    [minY - height * 0.01, -6.75 * headScale, minY - height * 0.18, chinZ - 4.15 * headScale, 0.58, 0],
-    [minY - height * 0.15, -6.85 * headScale, minY - height * 0.23, chinZ - 3.75 * headScale, 0.56, 0],
-    [minY - height * 0.28, -7.3 * headScale, minY - height * 0.28, chinZ - 3.4 * headScale, 0.58, 0],
+    [maxY + height * 0.11, foreheadZ - 0.95 * headScale, minY - height * 0.015, chinZ - 0.35 * headScale, 1.00, 0.90],
+    [maxY + height * 0.19, foreheadZ - 3.65 * headScale, minY - height * 0.025, chinZ - 0.9 * headScale, 0.96, 0.68],
+    [maxY + height * 0.22, -4.9 * headScale, minY - height * 0.045, chinZ - 1.7 * headScale, 0.91, 0.42],
+    [maxY + height * 0.20, -6.85 * headScale, minY - height * 0.075, chinZ - 2.6 * headScale, 0.88, 0.20],
+    [maxY + height * 0.06, -9.7 * headScale, minY - height * 0.10, chinZ - 3.35 * headScale, 0.81, 0.05],
+    [maxY - height * 0.20, -10.7 * headScale, minY - height * 0.12, chinZ - 3.9 * headScale, 0.71, 0],
+    [maxY - height * 0.50, -9.35 * headScale, minY - height * 0.14, chinZ - 4.15 * headScale, 0.65, 0],
+    [maxY - height * 0.80, -7.3 * headScale, minY - height * 0.15, chinZ - 4.05 * headScale, 0.61, 0],
+    [minY - height * 0.02, -6.75 * headScale, minY - height * 0.21, chinZ - 3.85 * headScale, 0.60, 0],
+    [minY - height * 0.15, -6.85 * headScale, minY - height * 0.26, chinZ - 3.5 * headScale, 0.59, 0],
+    [minY - height * 0.30, -7.3 * headScale, minY - height * 0.30, chinZ - 3.2 * headScale, 0.60, 0],
   ];
   const parameter = (key: string) => clamp(params[key] ?? 0, -1, 1);
   // Spread crown-height adjustment from the forehead slope to the apex rather
@@ -333,6 +342,208 @@ function createPhotoTexture(atlas: Uint8ClampedArray, size: number) {
   return texture;
 }
 
+function createSkinProjectionTexture(colors: Float32Array, size: number) {
+  const pixels = new Uint8ClampedArray(size * size * 4);
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    pixels[offset] = linearToSrgb(colors[offset]);
+    pixels[offset + 1] = linearToSrgb(colors[offset + 1]);
+    pixels[offset + 2] = linearToSrgb(colors[offset + 2]);
+    pixels[offset + 3] = 255;
+  }
+  return createPhotoTexture(pixels, size);
+}
+
+function sampleLinearTexture(pixels: ArrayLike<number>, size: number, uv: Point2, isSrgb: boolean): Point3 {
+  const x = clamp(uv[0] * size - 0.5, 0, size - 1);
+  const y = clamp((1 - uv[1]) * size - 0.5, 0, size - 1);
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const x1 = Math.min(size - 1, x0 + 1), y1 = Math.min(size - 1, y0 + 1);
+  const fx = x - x0, fy = y - y0;
+  return [0, 1, 2].map((channel) => {
+    const at = (px: number, py: number) => {
+      const value = pixels[(py * size + px) * 4 + channel];
+      return isSrgb ? srgbToLinear(value) : value;
+    };
+    return (at(x0, y0) * (1 - fx) + at(x1, y0) * fx) * (1 - fy)
+      + (at(x0, y1) * (1 - fx) + at(x1, y1) * fx) * fy;
+  }) as Point3;
+}
+
+/** Fade the photo atlas into the same forehead-derived skin map used by the
+ * generated scalp. Sampling the face atlas to paint the scalp copied hairline
+ * pixels onto the bald head and still left a visible material seam. */
+function stitchScalpBoundary(
+  skinMap: Float32Array,
+  skinSize: number,
+  faceAtlas: Uint8ClampedArray,
+  faceSize: number,
+  skinUvs: Float32Array,
+  faceUvs: Point2[],
+  boundary: number[],
+) {
+  if (boundary.length < 2) return skinMap;
+  const stitched = skinMap.slice();
+  const sourceAtlas = faceAtlas.slice();
+  const faceBestWeight = new Float32Array(faceSize * faceSize);
+  const faceSeamColor = new Float32Array(faceSize * faceSize * 3);
+  const faceBoundarySamples: { u: number; v: number; faceU: number; faceV: number }[] = [];
+  const minFaceV = 0.12;
+
+  const paint = (u: number, v: number, faceU: number, faceV: number) => {
+    if (faceU < 0 || faceU > 1 || faceV < 0 || faceV > 1) return;
+    if (v >= minFaceV) faceBoundarySamples.push({ u, v, faceU, faceV });
+  };
+
+  for (let index = 0; index < boundary.length; index++) {
+    const a = boundary[index];
+    const b = boundary[(index + 1) % boundary.length];
+    let u0 = skinUvs[a * 2], u1 = skinUvs[b * 2];
+    const v0 = skinUvs[a * 2 + 1], v1 = skinUvs[b * 2 + 1];
+    if (u1 - u0 > 0.5) u1 -= 1;
+    else if (u1 - u0 < -0.5) u1 += 1;
+    const faceA = faceUvs[a], faceB = faceUvs[b];
+    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(u1 - u0) * skinSize, Math.abs(v1 - v0) * skinSize)));
+    for (let step = 0; step < steps; step++) {
+      const t = step / steps;
+      paint(
+        ((u0 + (u1 - u0) * t) % 1 + 1) % 1,
+        v0 + (v1 - v0) * t,
+        faceA[0] + (faceB[0] - faceA[0]) * t,
+        faceA[1] + (faceB[1] - faceA[1]) * t,
+      );
+    }
+  }
+
+  // Match the face atlas to the skin map, never the reverse: the face edge may
+  // contain hair or shadow, while the generated map is derived from clean
+  // forehead skin. This keeps the forehead texture authoritative on both sides.
+  for (const sample of faceBoundarySamples) {
+    const color = sampleLinearTexture(stitched, skinSize, [sample.u, sample.v], false);
+    const faceRadius = sample.v > 0.76 ? 120 : sample.v > 0.46 ? 100 : 72;
+    const centerX = sample.faceU * faceSize - 0.5;
+    const centerY = (1 - sample.faceV) * faceSize - 0.5;
+    const baseX = Math.round(centerX), baseY = Math.round(centerY);
+    for (let dy = -faceRadius; dy <= faceRadius; dy++) {
+      const y = baseY + dy;
+      if (y < 0 || y >= faceSize) continue;
+      for (let dx = -faceRadius; dx <= faceRadius; dx++) {
+        const distance = Math.hypot(baseX + dx - centerX, y - centerY);
+        if (distance >= faceRadius) continue;
+        const t = clamp(1 - distance / faceRadius, 0, 1);
+        const weight = t * t * (3 - 2 * t);
+        const x = baseX + dx;
+        if (x < 0 || x >= faceSize) continue;
+        const index = y * faceSize + x;
+        if (weight <= faceBestWeight[index]) continue;
+        faceBestWeight[index] = weight;
+        faceSeamColor[index * 3] = color[0];
+        faceSeamColor[index * 3 + 1] = color[1];
+        faceSeamColor[index * 3 + 2] = color[2];
+      }
+    }
+  }
+  for (let index = 0; index < faceBestWeight.length; index++) {
+    const weight = faceBestWeight[index];
+    if (weight <= 0) continue;
+    const offset = index * 4;
+    const seamOffset = index * 3;
+    for (let channel = 0; channel < 3; channel++) {
+      const original = srgbToLinear(sourceAtlas[offset + channel]);
+      faceAtlas[offset + channel] = linearToSrgb(original * (1 - weight) + faceSeamColor[seamOffset + channel] * weight);
+    }
+  }
+  return stitched;
+}
+
+/** Recover the actual outer loop after subdivision. The original template
+ * boundary omits the edge vertices inserted by Loop subdivision, which leaves
+ * the skin-map correction misaligned with the rendered forehead seam. */
+function faceBoundaryLoop(triangles: [number, number, number][], startHint: number) {
+  const edges = new Map<string, { a: number; b: number; count: number }>();
+  for (const triangle of triangles) {
+    for (const [a, b] of [[triangle[0], triangle[1]], [triangle[1], triangle[2]], [triangle[2], triangle[0]]]) {
+      const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+      const edge = edges.get(key);
+      if (edge) edge.count++;
+      else edges.set(key, { a, b, count: 1 });
+    }
+  }
+  const adjacent = new Map<number, number[]>();
+  for (const { a, b, count } of edges.values()) {
+    if (count !== 1) continue;
+    adjacent.set(a, [...(adjacent.get(a) ?? []), b]);
+    adjacent.set(b, [...(adjacent.get(b) ?? []), a]);
+  }
+  const firstNeighbors = adjacent.get(startHint);
+  if (!firstNeighbors?.length) return [];
+  const loop = [startHint];
+  let previous = startHint, current = firstNeighbors[0];
+  while (current !== startHint && loop.length <= adjacent.size) {
+    loop.push(current);
+    const neighbors = adjacent.get(current) ?? [];
+    const next = neighbors.find((id) => id !== previous);
+    if (next === undefined) return [];
+    previous = current;
+    current = next;
+  }
+  return current === startHint ? loop : [];
+}
+
+/** Duplicate triangles that cross the cylindrical UV seam and unwrap their U
+ * coordinates. Shared vertices cannot carry both sides of a texture seam. */
+function createUnwrappedSkinGeometry(source: THREE.BufferGeometry, indices: number[], uvs: Float32Array) {
+  const position = source.getAttribute('position') as THREE.BufferAttribute;
+  const normal = source.getAttribute('normal') as THREE.BufferAttribute;
+  const color = source.getAttribute('color') as THREE.BufferAttribute;
+  const positions: number[] = [], normals: number[] = [], colors: number[] = [], outputUvs: number[] = [];
+  const morphs = (Object.entries(source.morphAttributes) as [string, THREE.BufferAttribute[]][]).map(([name, attributes]) => ({
+    name,
+    attributes,
+    values: attributes.map(() => [] as number[]),
+  }));
+  const append = (attribute: THREE.BufferAttribute, id: number, target: number[]) => {
+    const offset = id * attribute.itemSize;
+    for (let channel = 0; channel < attribute.itemSize; channel++) target.push(attribute.array[offset + channel] as number);
+  };
+
+  for (let offset = 0; offset < indices.length; offset += 3) {
+    const triangle = indices.slice(offset, offset + 3);
+    const triangleU = triangle.map((id) => uvs[id * 2]);
+    if (Math.max(...triangleU) - Math.min(...triangleU) > 0.5) {
+      for (let corner = 0; corner < triangleU.length; corner++) if (triangleU[corner] < 0.5) triangleU[corner] += 1;
+    }
+    for (let corner = 0; corner < 3; corner++) {
+      const id = triangle[corner];
+      append(position, id, positions);
+      append(normal, id, normals);
+      append(color, id, colors);
+      outputUvs.push(triangleU[corner], uvs[id * 2 + 1]);
+      for (const morph of morphs) for (let morphIndex = 0; morphIndex < morph.attributes.length; morphIndex++) {
+        append(morph.attributes[morphIndex], id, morph.values[morphIndex]);
+      }
+    }
+  }
+
+  const result = new THREE.BufferGeometry();
+  result.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  result.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  result.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  result.setAttribute('uv', new THREE.Float32BufferAttribute(outputUvs, 2));
+  for (const morph of morphs) {
+    result.morphAttributes[morph.name] = morph.values.map((values, index) => {
+      const attribute = new THREE.Float32BufferAttribute(values, morph.attributes[index].itemSize);
+      attribute.name = morph.attributes[index].name;
+      return attribute;
+    });
+  }
+  result.morphTargetsRelative = source.morphTargetsRelative;
+  result.boundingBox = source.boundingBox?.clone() ?? null;
+  result.boundingSphere = source.boundingSphere?.clone() ?? null;
+  if (!result.boundingBox) result.computeBoundingBox();
+  if (!result.boundingSphere) result.computeBoundingSphere();
+  return result;
+}
+
 function buildExpressionCages(natural: NaturalHead, rig: ExpressionRigAsset, boundary: number[]) {
   const faceDeltas = retargetExpressionDeltas(rig, natural.identity, natural.cage.triangles.slice(0, natural.cage.faceTriangleCount));
   const mouthY = (natural.neutral[13][1] + natural.neutral[14][1]) * 0.5;
@@ -436,7 +647,7 @@ function addEars(group: THREE.Group, head: THREE.Mesh, source: EarTemplate, para
       const attachment = source.rootWeights[id]
         * smoothstep((y + 2.6) / 1.1) * smoothstep((6 - y) / 1)
         * smoothstep((z + 5.4) / 1) * smoothstep((0.7 - z) / 1.2);
-      const relief = 0.1 + 0.45 * Math.log1p(Math.exp((x - 9) / 0.45));
+      const relief = 0.12 + 0.38 * Math.log1p(Math.exp((x - 8.5) / 0.55));
       const outset = lerp(-0.12, relief, attachment) * scale;
       // Preserve the pinna and the recessed bowl; only fair low-relief skin
       // at the attachment. Its normals meet the sampled skull tangentially.
@@ -516,10 +727,10 @@ export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: Exp
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(generated.uv.flat(), 2));
 
   const skin: [number, number, number] = result?.skinColor ?? [197, 159, 137];
-  // The generated cranium, nape, neck and ears share one diffuse skin tone.
-  // Face-region samples remain useful for painting the photo atlas, but using
-  // them here copied local photo highlights/shadows onto otherwise unseen skin.
-  const skinAt = createSkinField(skin, [], effective);
+  // Vertex colours are the fallback for flat mode or missing texture. The
+  // forehead-derived maps cover the scalp, rear skull and nape without wrapping
+  // recognizable facial features around the head.
+  const skinAt = createSkinField(skin, result?.skinSamples ?? [], effective);
   applySkinColors(geometry, skinAt);
   geometry.setIndex(generated.triangles.flat());
   geometry.addGroup(0, generated.faceTriangleCount * 3, 0);
@@ -527,16 +738,98 @@ export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: Exp
   computeSmoothNormals(geometry);
   if (includeExpressions && rig) addExpressionTargets(geometry, generated, deltaSurfaces);
 
+  let minY = Infinity, maxY = -Infinity;
+  for (const point of generated.positions) {
+    minY = Math.min(minY, point[1]);
+    maxY = Math.max(maxY, point[1]);
+  }
+  const rearUvs = new Float32Array(generated.positions.length * 2);
+  generated.positions.forEach((point, id) => {
+    // One cylindrical map follows the head surface from forehead to nape.
+    // Its seam sits at the back of the skull, away from the face and throat.
+    const angle = Math.atan2(point[0], point[2]);
+    rearUvs[id * 2] = (angle / (Math.PI * 2) + 1.5) % 1;
+    rearUvs[id * 2 + 1] = clamp((point[1] - minY) / Math.max(1e-6, maxY - minY), 0, 1);
+  });
+
+  const faceBoundary = faceBoundaryLoop(generated.triangles.slice(0, generated.faceTriangleCount), template.boundary[0]);
+  const stitchedSkinMap = result?.rearSkinMap && result.atlas
+    ? stitchScalpBoundary(result.rearSkinMap, result.rearSkinMapSize, result.atlas, result.atlasSize,
+      rearUvs, generated.uv, faceBoundary.length ? faceBoundary : template.boundary)
+    : result?.rearSkinMap;
   let texture: THREE.CanvasTexture | undefined;
   if (result?.atlas && !flat) texture = createPhotoTexture(result.atlas, result.atlasSize);
+  const scalpTexture = result && stitchedSkinMap
+    ? createSkinProjectionTexture(stitchedSkinMap, result.rearSkinMapSize)
+    : undefined;
+  const rearSkinTexture = scalpTexture;
+  if (scalpTexture) {
+    scalpTexture.wrapS = THREE.RepeatWrapping;
+    scalpTexture.needsUpdate = true;
+  }
   const roughness = style === 'cartoon' ? 0.94 : 0.82;
   const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: flat || !texture, map: flat ? null : texture ?? null, roughness, metalness: 0, side: THREE.DoubleSide });
   if (result?.atlas) faceMaterial.userData.photoAtlas = { pixels: result.atlas, size: result.atlasSize };
   if (texture) faceMaterial.userData.photoTexture = texture;
+  const skinProjectionMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: flat || !scalpTexture,
+    map: flat ? null : scalpTexture ?? null,
+    roughness,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  if (scalpTexture) skinProjectionMaterial.userData.skinProjectionTexture = scalpTexture;
   const skinMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness, metalness: 0, side: THREE.DoubleSide });
-  const mesh = new THREE.Mesh(geometry, [faceMaterial, skinMaterial]);
-  mesh.name = 'proceduralHeadAndNeck';
-  group.add(mesh);
+  const rearSkinMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: flat || !rearSkinTexture,
+    map: flat ? null : rearSkinTexture ?? null,
+    roughness,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  if (rearSkinTexture) {
+    rearSkinTexture.wrapS = THREE.RepeatWrapping;
+    rearSkinTexture.needsUpdate = true;
+    rearSkinMaterial.userData.rearSkinTexture = rearSkinTexture;
+  }
+
+  // The face keeps its photo atlas. Every generated scalp, rear and neck
+  // triangle shares one forehead-skin tile with cylindrical UVs; stitching
+  // that tile to the face atlas removes the hard material boundary.
+  const faceGeometry = geometry.clone();
+  faceGeometry.clearGroups();
+  faceGeometry.setIndex(generated.triangles.slice(0, generated.faceTriangleCount).flat());
+
+  const skinGeometry = geometry.clone();
+  skinGeometry.clearGroups();
+  skinGeometry.setAttribute('uv', new THREE.BufferAttribute(rearUvs, 2));
+
+  const projectedIndices: number[] = [], solidIndices: number[] = [];
+  for (const triangle of generated.triangles.slice(generated.faceTriangleCount)) {
+    const cameraDepth = result
+      ? triangle.reduce((sum, id) => sum + rotate(generated.positions[id], result.fit.camera)[2], 0) / 3
+      : -Infinity;
+    const scalpTriangle = triangle.filter((id) => generated.parts[id] === 'cranium' || generated.parts[id] === 'bridge').length >= 2;
+    // Keep the front-facing scalp on the same forehead-derived tile as the
+    // rear skull and neck. The cylindrical UVs prevent stretched image edges.
+    if (result?.rearSkinMap && cameraDepth > -3.5 && scalpTriangle) projectedIndices.push(...triangle);
+    else solidIndices.push(...triangle);
+  }
+  skinGeometry.setIndex(projectedIndices);
+
+  const rearGeometry = createUnwrappedSkinGeometry(geometry, solidIndices, rearUvs);
+
+  const faceMesh = new THREE.Mesh(faceGeometry, faceMaterial);
+  faceMesh.name = 'proceduralHeadAndNeck';
+  group.add(faceMesh);
+  const skinMesh = new THREE.Mesh(skinGeometry, skinProjectionMaterial);
+  skinMesh.name = 'proceduralHeadSkin';
+  group.add(skinMesh);
+  const rearMesh = new THREE.Mesh(rearGeometry, rearSkinMaterial);
+  rearMesh.name = 'proceduralHeadRearSkin';
+  group.add(rearMesh);
 
   const halfWidth = Math.max(...template.boundary.map((id) => Math.abs(generated.positions[id][0])));
   if (includeEars && ears) {
@@ -553,23 +846,42 @@ export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: Exp
     fitGeometry.dispose(); fitMaterial.dispose();
   }
   if (includeOralCavity && rig) addOralCavity(group, geometry, rig, generated.mouthRim!, natural.identity);
+  geometry.dispose();
   group.userData = { generator: 'portrait-head-lab-procedural', schemaVersion: 1, expressionSet: includeExpressions && rig ? expressionSet : undefined, units: 'metres', forward: '+Z', up: '+Y', style, shapeParams: { ...effective }, headMeasurements: result?.fit.measurements, rigged: false };
   return group;
 }
 
 export function updateFlatAppearance(object: THREE.Object3D | undefined, flat: boolean) {
   object?.traverse((child) => {
-    if (!(child instanceof THREE.Mesh) || child.name !== 'proceduralHeadAndNeck') return;
-    const material = (Array.isArray(child.material) ? child.material[0] : child.material) as THREE.MeshStandardMaterial;
-    let texture = material.userData.photoTexture as THREE.Texture | undefined;
-    const atlas = material.userData.photoAtlas as { pixels: Uint8ClampedArray; size: number } | undefined;
-    if (!flat && !texture && atlas) {
-      texture = createPhotoTexture(atlas.pixels, atlas.size);
-      if (texture) material.userData.photoTexture = texture;
+    if (!(child instanceof THREE.Mesh)) return;
+    if (child.name === 'proceduralHeadAndNeck') {
+      const material = (Array.isArray(child.material) ? child.material[0] : child.material) as THREE.MeshStandardMaterial;
+      let texture = material.userData.photoTexture as THREE.Texture | undefined;
+      const atlas = material.userData.photoAtlas as { pixels: Uint8ClampedArray; size: number } | undefined;
+      if (!flat && !texture && atlas) {
+        texture = createPhotoTexture(atlas.pixels, atlas.size);
+        if (texture) material.userData.photoTexture = texture;
+      }
+      material.map = flat ? null : texture ?? null;
+      material.vertexColors = flat || !texture;
+      material.needsUpdate = true;
+      return;
     }
-    material.map = flat ? null : texture ?? null;
-    material.vertexColors = flat || !texture;
-    material.needsUpdate = true;
+    if (child.name === 'proceduralHeadSkin') {
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      const projection = materials[0] as THREE.MeshStandardMaterial;
+      const texture = projection.userData.skinProjectionTexture as THREE.Texture | undefined;
+      projection.map = flat ? null : texture ?? null;
+      projection.vertexColors = flat || !texture;
+      projection.needsUpdate = true;
+    }
+    if (child.name === 'proceduralHeadRearSkin') {
+      const material = (Array.isArray(child.material) ? child.material[0] : child.material) as THREE.MeshStandardMaterial;
+      const texture = material.userData.rearSkinTexture as THREE.Texture | undefined;
+      material.map = flat ? null : texture ?? null;
+      material.vertexColors = flat || !texture;
+      material.needsUpdate = true;
+    }
   });
 }
 
@@ -584,6 +896,10 @@ export function disposeObject(object: THREE.Object3D) {
       if (mapped.map) textures.add(mapped.map);
       const photoTexture = material.userData.photoTexture;
       if (photoTexture instanceof THREE.Texture) textures.add(photoTexture);
+      const skinProjectionTexture = material.userData.skinProjectionTexture;
+      if (skinProjectionTexture instanceof THREE.Texture) textures.add(skinProjectionTexture);
+      const rearSkinTexture = material.userData.rearSkinTexture;
+      if (rearSkinTexture instanceof THREE.Texture) textures.add(rearSkinTexture);
     }
   });
   textures.forEach((texture) => texture.dispose());
