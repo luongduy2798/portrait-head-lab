@@ -369,9 +369,9 @@ function sampleLinearTexture(pixels: ArrayLike<number>, size: number, uv: Point2
   }) as Point3;
 }
 
-/** Fade the photo atlas into the same forehead-derived skin map used by the
- * generated scalp. Sampling the face atlas to paint the scalp copied hairline
- * pixels onto the bald head and still left a visible material seam. */
+/** Match the face edge to the generated skin with a smooth colour gain.
+ * Multiplication preserves local texture contrast; the input atlas stays
+ * unchanged so rebuilding geometry cannot accumulate colour corrections. */
 function stitchScalpBoundary(
   skinMap: Float32Array,
   skinSize: number,
@@ -381,11 +381,13 @@ function stitchScalpBoundary(
   faceUvs: Point2[],
   boundary: number[],
 ) {
-  if (boundary.length < 2) return skinMap;
-  const stitched = skinMap.slice();
-  const sourceAtlas = faceAtlas.slice();
-  const faceBestWeight = new Float32Array(faceSize * faceSize);
-  const faceSeamColor = new Float32Array(faceSize * faceSize * 3);
+  const stitched = faceAtlas.slice();
+  if (boundary.length < 2) return stitched;
+  // Only the broad colour correction uses a smaller grid. Source detail is
+  // sampled and retained at the original atlas resolution.
+  const correctionSize = Math.min(faceSize, 256);
+  const faceBestWeight = new Float32Array(correctionSize * correctionSize);
+  const correction = new Float32Array(correctionSize * correctionSize * 4);
   const faceBoundarySamples: { u: number; v: number; faceU: number; faceV: number }[] = [];
   const minFaceV = 0.12;
 
@@ -414,42 +416,48 @@ function stitchScalpBoundary(
     }
   }
 
-  // Match the face atlas to the skin map, never the reverse: the face edge may
-  // contain hair or shadow, while the generated map is derived from clean
-  // forehead skin. This keeps the forehead texture authoritative on both sides.
+  // Average neighbouring log gains instead of switching to a single winning
+  // boundary sample. This keeps the correction smooth along the seam too.
   for (const sample of faceBoundarySamples) {
-    const color = sampleLinearTexture(stitched, skinSize, [sample.u, sample.v], false);
-    const faceRadius = sample.v > 0.76 ? 120 : sample.v > 0.46 ? 100 : 72;
-    const centerX = sample.faceU * faceSize - 0.5;
-    const centerY = (1 - sample.faceV) * faceSize - 0.5;
+    const color = sampleLinearTexture(skinMap, skinSize, [sample.u, sample.v], false);
+    const faceColor = sampleLinearTexture(faceAtlas, faceSize, [sample.faceU, sample.faceV], true);
+    const logGain = color.map((value, channel) => Math.log(clamp(value / Math.max(faceColor[channel], 1e-5), 0.5, 2)));
+    // Equivalent to 72–120 pixels on a 1024 atlas, at every atlas resolution.
+    const faceRadius = (sample.v > 0.76 ? 120 : sample.v > 0.46 ? 100 : 72) * correctionSize / 1024;
+    const radius = Math.ceil(faceRadius);
+    const centerX = sample.faceU * correctionSize - 0.5;
+    const centerY = (1 - sample.faceV) * correctionSize - 0.5;
     const baseX = Math.round(centerX), baseY = Math.round(centerY);
-    for (let dy = -faceRadius; dy <= faceRadius; dy++) {
+    for (let dy = -radius; dy <= radius; dy++) {
       const y = baseY + dy;
-      if (y < 0 || y >= faceSize) continue;
-      for (let dx = -faceRadius; dx <= faceRadius; dx++) {
+      if (y < 0 || y >= correctionSize) continue;
+      for (let dx = -radius; dx <= radius; dx++) {
         const distance = Math.hypot(baseX + dx - centerX, y - centerY);
         if (distance >= faceRadius) continue;
         const t = clamp(1 - distance / faceRadius, 0, 1);
         const weight = t * t * (3 - 2 * t);
         const x = baseX + dx;
-        if (x < 0 || x >= faceSize) continue;
-        const index = y * faceSize + x;
-        if (weight <= faceBestWeight[index]) continue;
-        faceBestWeight[index] = weight;
-        faceSeamColor[index * 3] = color[0];
-        faceSeamColor[index * 3 + 1] = color[1];
-        faceSeamColor[index * 3 + 2] = color[2];
+        if (x < 0 || x >= correctionSize) continue;
+        const index = y * correctionSize + x;
+        faceBestWeight[index] = Math.max(faceBestWeight[index], weight);
+        for (let channel = 0; channel < 3; channel++) correction[index * 4 + channel] += logGain[channel] * weight;
+        correction[index * 4 + 3] += weight;
       }
     }
   }
   for (let index = 0; index < faceBestWeight.length; index++) {
-    const weight = faceBestWeight[index];
-    if (weight <= 0) continue;
     const offset = index * 4;
-    const seamOffset = index * 3;
+    const totalWeight = correction[offset + 3];
+    if (totalWeight <= 0) continue;
+    for (let channel = 0; channel < 3; channel++) correction[offset + channel] *= faceBestWeight[index] / totalWeight;
+  }
+  for (let y = 0; y < faceSize; y++) for (let x = 0; x < faceSize; x++) {
+    const gain = sampleLinearTexture(correction, correctionSize, [(x + 0.5) / faceSize, 1 - (y + 0.5) / faceSize], false);
+    if (gain.every((value) => value === 0)) continue;
+    const offset = (y * faceSize + x) * 4;
     for (let channel = 0; channel < 3; channel++) {
-      const original = srgbToLinear(sourceAtlas[offset + channel]);
-      faceAtlas[offset + channel] = linearToSrgb(original * (1 - weight) + faceSeamColor[seamOffset + channel] * weight);
+      const original = srgbToLinear(faceAtlas[offset + channel]);
+      stitched[offset + channel] = linearToSrgb(original * Math.exp(gain[channel]));
     }
   }
   return stitched;
@@ -496,7 +504,7 @@ function createUnwrappedSkinGeometry(source: THREE.BufferGeometry, indices: numb
   const normal = source.getAttribute('normal') as THREE.BufferAttribute;
   const color = source.getAttribute('color') as THREE.BufferAttribute;
   const positions: number[] = [], normals: number[] = [], colors: number[] = [], outputUvs: number[] = [];
-  const morphs = (Object.entries(source.morphAttributes) as [string, THREE.BufferAttribute[]][]).map(([name, attributes]) => ({
+  const morphs = (Object.entries(source.morphAttributes) as [keyof typeof source.morphAttributes, THREE.BufferAttribute[]][]).map(([name, attributes]) => ({
     name,
     attributes,
     values: attributes.map(() => [] as number[]),
@@ -753,14 +761,14 @@ export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: Exp
   });
 
   const faceBoundary = faceBoundaryLoop(generated.triangles.slice(0, generated.faceTriangleCount), template.boundary[0]);
-  const stitchedSkinMap = result?.rearSkinMap && result.atlas
+  const faceAtlas = result?.rearSkinMap && result.atlas
     ? stitchScalpBoundary(result.rearSkinMap, result.rearSkinMapSize, result.atlas, result.atlasSize,
       rearUvs, generated.uv, faceBoundary.length ? faceBoundary : template.boundary)
-    : result?.rearSkinMap;
+    : result?.atlas;
   let texture: THREE.CanvasTexture | undefined;
-  if (result?.atlas && !flat) texture = createPhotoTexture(result.atlas, result.atlasSize);
-  const scalpTexture = result && stitchedSkinMap
-    ? createSkinProjectionTexture(stitchedSkinMap, result.rearSkinMapSize)
+  if (result && faceAtlas && !flat) texture = createPhotoTexture(faceAtlas, result.atlasSize);
+  const scalpTexture = result?.rearSkinMap
+    ? createSkinProjectionTexture(result.rearSkinMap, result.rearSkinMapSize)
     : undefined;
   const rearSkinTexture = scalpTexture;
   if (scalpTexture) {
@@ -769,7 +777,7 @@ export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: Exp
   }
   const roughness = style === 'cartoon' ? 0.94 : 0.82;
   const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: flat || !texture, map: flat ? null : texture ?? null, roughness, metalness: 0, side: THREE.DoubleSide });
-  if (result?.atlas) faceMaterial.userData.photoAtlas = { pixels: result.atlas, size: result.atlasSize };
+  if (result && faceAtlas) faceMaterial.userData.photoAtlas = { pixels: faceAtlas, size: result.atlasSize };
   if (texture) faceMaterial.userData.photoTexture = texture;
   const skinProjectionMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,

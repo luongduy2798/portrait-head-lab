@@ -10,7 +10,14 @@ export async function exportHead(object: THREE.Object3D) {
   clone.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
     const copyMaterial = (material: THREE.Material) => {
-      const next = material.clone() as THREE.MeshStandardMaterial; next.wireframe = false;
+      // Preview buffers are not glTF metadata. Serializing photoAtlas adds
+      // millions of JSON entries besides the embedded PNG and can make our
+      // own export exceed the import size limit. Exclude them before clone()
+      // deep-copies userData, without touching the live preview material.
+      const source = Object.create(material) as THREE.Material;
+      source.userData = { ...material.userData };
+      for (const key of ['photoAtlas', 'photoTexture', 'skinProjectionTexture', 'rearSkinTexture']) delete source.userData[key];
+      const next = source.clone() as THREE.MeshStandardMaterial; next.wireframe = false;
       return next;
     };
     // A material array requires geometry groups. Keep single-material ears
