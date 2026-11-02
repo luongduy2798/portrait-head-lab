@@ -43,7 +43,9 @@ export function smoothHeadSurfaceFields(head, fields, passes = 3) {
                 let total = 0;
                 for (const id of adjacent)
                     total += values[id][axis];
-                return value * (1 - count * beta) + total * beta;
+                const smooth = value * (1 - count * beta) + total * beta;
+                const retain = surface.detailWeights?.[index] ?? 0;
+                return smooth + (value - smooth) * retain;
             });
         };
         let nextVertex = surface.positions.length;
@@ -66,10 +68,12 @@ export function smoothHeadSurfaceFields(head, fields, passes = 3) {
         subdividedFields = subdividedFields.map(subdivideValues);
         const photoPoints = surface.photoPoints ? subdivideValues(surface.photoPoints) : undefined;
         const parts = [...surface.parts], uv = [...surface.uv], skinFade = [...surface.skinFade];
+        const detailWeights = surface.detailWeights ? [...surface.detailWeights] : undefined;
         for (const { a, b } of edges.values()) {
             parts.push(surface.parts[a] === surface.parts[b] ? surface.parts[a] : 'bridge');
             uv.push([(surface.uv[a][0] + surface.uv[b][0]) * 0.5, (surface.uv[a][1] + surface.uv[b][1]) * 0.5]);
             skinFade.push((surface.skinFade[a] + surface.skinFade[b]) * 0.5);
+            detailWeights?.push((surface.detailWeights[a] + surface.detailWeights[b]) * 0.5);
         }
         const triangles = [];
         for (const [a, b, c] of surface.triangles) {
@@ -80,7 +84,7 @@ export function smoothHeadSurfaceFields(head, fields, passes = 3) {
         }
         const mouthRim = surface.mouthRim?.flatMap((id, i, rim) => [id, edges.get(edgeKey(id, rim[(i + 1) % rim.length])).vertex]);
         const neckRim = surface.neckRim?.flatMap((id, i, rim) => [id, edges.get(edgeKey(id, rim[(i + 1) % rim.length])).vertex]);
-        surface = { positions, parts, uv, triangles, skinFade, photoPoints, mouthRim, neckRim, faceTriangleCount: surface.faceTriangleCount * 4 };
+        surface = { positions, parts, uv, triangles, skinFade, photoPoints, detailWeights, mouthRim, neckRim, faceTriangleCount: surface.faceTriangleCount * 4 };
     }
     return { surface, fields: subdividedFields };
 }

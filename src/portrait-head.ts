@@ -54,6 +54,7 @@ export async function restorePortraitHead(data: PortraitHeadData, options: Portr
     ...data.appearance,
     fit: {
       params: data.params, measurements: data.measurements, camera: data.camera,
+      identity: data.identity,
       expression: {}, projected: [], normalizedError: 0, iterations: 0, landmarkWeights: [], warnings: [],
     },
     timings: {},

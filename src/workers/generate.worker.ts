@@ -23,7 +23,7 @@ self.onmessage = ({ data }: MessageEvent<{ template: HeadTemplate; anchors: Anch
       skinColor: [...appearance.color], skinDarkColor: [...appearance.color], skinLightColor: [...appearance.color], skinSamples: [],
     };
     try { texture = buildTexture(template, fit, analysis, pixels, width, height); }
-    catch { fit.warnings.push('Không tạo được bản chiếu ảnh cũ để đối chiếu. Đầu dựng hình và màu da vẫn sử dụng được.'); }
+    catch { fit.warnings.push('Không tạo được texture từ ảnh. Đang hiển thị hình học với màu da ước lượng; chi tiết mắt/môi từ ảnh chưa được giữ.'); }
     const transfer: Transferable[] = [];
     if (texture.atlas) transfer.push(texture.atlas.buffer);
     if (texture.scalpSkinMap) transfer.push(texture.scalpSkinMap.buffer);

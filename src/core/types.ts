@@ -52,8 +52,18 @@ export interface HeadMeasurements {
 export type Style = 'natural' | 'cartoon' | 'caricature';
 export interface GenerationOptions { occludedEyes: boolean }
 export interface PaletteOverrides { skin?: string; eyes?: string; brows?: string }
+/** Neutral, object-space corrections in canonical centimetres, not raw
+ * detector landmarks. Absent on heads made before local identity fitting. */
+export interface FaceIdentity {
+  version: 1;
+  deltas: Point3[];
+  depthConfidence: number;
+}
 export interface FitResult {
   params: ShapeParams;
+  identity?: FaceIdentity;
+  /** Reprojection error before the local identity correction. */
+  coarseNormalizedError?: number;
   measurements: HeadMeasurements;
   expression: ShapeParams;
   camera: CameraFit;

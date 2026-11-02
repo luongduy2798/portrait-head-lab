@@ -2,6 +2,7 @@ import type { Analysis, GenerationOptions } from './types.js';
 export declare const eyeContours: {
     upper: number[];
     lower: number[];
+    lid: number[];
 }[];
 export declare const browContours: {
     upper: number[];

@@ -113,8 +113,8 @@
 
   // src/core/visibility.ts
   var eyeContours = [
-    { upper: [33, 246, 161, 160, 159, 158, 157, 173, 133], lower: [33, 7, 163, 144, 145, 153, 154, 155, 133] },
-    { upper: [362, 398, 384, 385, 386, 387, 388, 466, 263], lower: [362, 382, 381, 380, 374, 373, 390, 249, 263] }
+    { upper: [33, 246, 161, 160, 159, 158, 157, 173, 133], lower: [33, 7, 163, 144, 145, 153, 154, 155, 133], lid: [130, 247, 30, 29, 27, 28, 56, 190, 243] },
+    { upper: [362, 398, 384, 385, 386, 387, 388, 466, 263], lower: [362, 382, 381, 380, 374, 373, 390, 249, 263], lid: [463, 414, 286, 258, 257, 259, 260, 467, 359] }
   ];
   var browContours = [
     { upper: [70, 63, 105, 66, 107], lower: [46, 53, 52, 65, 55] },
@@ -149,6 +149,112 @@
     return [...eyeIds].reduce((sum, id) => sum + weights[id], 0) / eyeIds.size;
   }
 
+  // src/core/identity.ts
+  function relativeDepthConfidence(analysis) {
+    const points = analysis.landmarks;
+    const width = Math.hypot(points[263][0] - points[33][0], points[263][1] - points[33][1]);
+    const depths = points.slice(0, 468).map((point) => point[2]).sort((a, b) => a - b);
+    const spread = (depths[444] - depths[23]) / Math.max(width, 1e-6);
+    return clamp((spread - 0.08) / 0.25, 0, 1) * clamp((2.5 - spread) / 0.75, 0, 1);
+  }
+  function unrotate([x, y, z], camera) {
+    const x1 = x * Math.cos(camera.rz) + y * Math.sin(camera.rz);
+    const y1 = -x * Math.sin(camera.rz) + y * Math.cos(camera.rz);
+    const x2 = x1 * Math.cos(camera.ry) - z * Math.sin(camera.ry);
+    const z2 = x1 * Math.sin(camera.ry) + z * Math.cos(camera.ry);
+    return [x2, y1 * Math.cos(camera.rx) + z2 * Math.sin(camera.rx), -y1 * Math.sin(camera.rx) + z2 * Math.cos(camera.rx)];
+  }
+  function facePositions(template, params, identity, expression = {}) {
+    return template.positions.slice(0, template.canonicalCount).map((point, id) => {
+      const shaped = deformPoint(point, "face", params, expression);
+      const delta = identity?.deltas[id];
+      return delta ? shaped.map((value, axis) => value + delta[axis]) : shaped;
+    });
+  }
+  function faceDetailWeights(template) {
+    const features = /* @__PURE__ */ new Set([
+      ...template.boundary,
+      ...eyeContours.flatMap(({ upper, lower }) => [...upper, ...lower]),
+      1,
+      2,
+      4,
+      5,
+      6,
+      19,
+      94,
+      97,
+      98,
+      168,
+      195,
+      326,
+      327
+    ]);
+    return Array.from({ length: template.canonicalCount }, (_, id) => features.has(id) ? 0.55 : 0.2);
+  }
+  function fitFaceIdentity(template, analysis, params, expression, camera, landmarkWeights) {
+    const base = facePositions(template, params, void 0, expression).map((point) => rotate(point, camera));
+    const count = template.canonicalCount;
+    const neighbors = base.map(() => /* @__PURE__ */ new Set());
+    const normals = base.map(() => [0, 0, 0]);
+    for (const [a, b, c] of template.triangles.slice(0, template.faceTriangleCount)) {
+      neighbors[a].add(b).add(c);
+      neighbors[b].add(a).add(c);
+      neighbors[c].add(a).add(b);
+      const ab = base[b].map((value, axis) => value - base[a][axis]);
+      const ac = base[c].map((value, axis) => value - base[a][axis]);
+      const normal = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
+      for (const id of [a, b, c]) for (let axis = 0; axis < 3; axis++) normals[id][axis] += normal[axis];
+    }
+    const smile = clamp(((expression.smile ?? 0) - 0.35) / 0.65, 0, 1);
+    const jaw = clamp(((expression.jawOpen ?? 0) - 0.25) / 0.75, 0, 1);
+    const blink = clamp(((expression.blink ?? 0) - 0.55) / 0.45, 0, 1);
+    const confidence = landmarkWeights.map((weight, id) => {
+      const [x, y] = template.positions[id];
+      const mouth = Math.exp(-((x / 3.8) ** 2) - ((y + 4.3) / 2.3) ** 2);
+      const lowerFace = Math.exp(-(((y + 7) / 3.5) ** 2));
+      const eye = Math.exp(-(((Math.abs(x) - 3.15) / 1.8) ** 2) - ((y - 2.5) / 1.3) ** 2);
+      const expressionRisk = Math.max(smile * mouth, jaw * lowerFace, blink * eye);
+      return clamp((weight - 0.2) / 0.8, 0, 1) ** 2 * (1 - 0.85 * expressionRisk);
+    });
+    const depthConfidence = relativeDepthConfidence(analysis) * clamp(1 - Math.max(Math.abs(camera.rx), Math.abs(camera.ry)) / 0.9, 0.15, 1);
+    const references = [33, 133, 263, 362, 50, 101, 280, 330, 10, 152];
+    let origin = 0, total = 0;
+    for (const id of references) {
+      const weight = confidence[id];
+      origin += (base[id][2] + analysis.landmarks[id][2] / camera.scale) * weight;
+      total += weight;
+    }
+    if (total < 1e-6) return { version: 1, deltas: base.map(() => [0, 0, 0]), depthConfidence: 0 };
+    origin /= total;
+    const faceWidth = Math.hypot(...template.positions[263].map((v, axis) => v - template.positions[33][axis]));
+    const limits = [faceWidth * 0.18, faceWidth * 0.18, faceWidth * 0.24];
+    const targets = base.map((point, id) => {
+      const [x, y, z] = analysis.landmarks[id];
+      return [(x - camera.tx) / camera.scale - point[0], (camera.ty - y) / camera.scale - point[1], -z / camera.scale + origin - point[2]];
+    });
+    const dataWeights = targets.map((delta, id) => {
+      const normal = normals[id];
+      const front = clamp(normal[2] / Math.max(1e-6, Math.hypot(...normal)) / 0.5, 0, 1);
+      return delta.map((value, axis) => {
+        const reliability = confidence[id] * (axis === 2 ? depthConfidence * front * 0.55 : 1);
+        return reliability / (1 + (Math.abs(value) / limits[axis]) ** 4);
+      });
+    });
+    let field = Array.from({ length: count }, () => [0, 0, 0]);
+    for (let iteration = 0; iteration < 24; iteration++) {
+      field = field.map((_, id) => [0, 1, 2].map((axis) => {
+        let mean = 0;
+        for (const neighbor of neighbors[id]) mean += field[neighbor][axis];
+        mean /= Math.max(1, neighbors[id].size);
+        const data = dataWeights[id][axis];
+        const smooth = axis === 2 ? 0.6 : 0.4;
+        const prior = (axis === 2 ? 0.12 : 0.015) + (1 - confidence[id]) * 0.8;
+        return clamp((data * clamp(targets[id][axis], -limits[axis], limits[axis]) + smooth * mean) / (data + smooth + prior), -limits[axis], limits[axis]);
+      }));
+    }
+    return { version: 1, deltas: field.map((delta) => unrotate(delta, camera)), depthConfidence };
+  }
+
   // src/core/fitter.ts
   var fittingLandmarks = [10, 21, 54, 67, 103, 109, 127, 162, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323, 454, 356, 389, 251, 284, 332, 297, 338, 33, 133, 159, 145, 263, 362, 386, 374, 70, 63, 105, 66, 107, 336, 296, 334, 293, 300, 1, 2, 4, 5, 6, 98, 327, 168, 195, 61, 291, 0, 17, 13, 14, 78, 308, 50, 280, 101, 330];
   var stableLandmarks = /* @__PURE__ */ new Set([33, 133, 263, 362, 1, 2, 4, 5, 6, 98, 327, 168, 195]);
@@ -160,11 +266,11 @@
     const cosine = Math.cos(angle), sine = Math.sin(angle);
     return scaled.map(([x, y]) => [x * cosine + y * sine, -x * sine + y * cosine]);
   }
-  function measureFaceProportions(analysis, template, params) {
+  function measureFaceProportions(analysis, template, params, identity) {
     const imageWidth = analysis.maskWidth > 0 ? analysis.maskWidth : 1;
     const imageHeight = analysis.maskHeight > 0 ? analysis.maskHeight : 1;
     const observed = localizeLandmarks(analysis.landmarks, imageWidth, imageHeight);
-    const fittedPositions = template.positions.slice(0, template.canonicalCount).map((point, index) => deformPoint(point, template.parts[index], params));
+    const fittedPositions = facePositions(template, params, identity);
     const canonical = localizeLandmarks(fittedPositions, 1, 1);
     const widthAt = (points, a, b) => Math.abs(points[a][0] - points[b][0]);
     const heightAt = (points) => Math.abs(points[152][1] - points[10][1]);
@@ -295,6 +401,7 @@
     const observed = analysis.landmarks;
     if (observed.length !== 478 || observed.some((point) => point.some((v) => !Number.isFinite(v)))) throw new Error("Landmark kh\xF4ng h\u1EE3p l\u1EC7.");
     const landmarkWeights = landmarkVisibility(analysis, options);
+    const depthConfidence = relativeDepthConfidence(analysis);
     const visibleEyes = eyeVisibility(landmarkWeights);
     const byId = new Map(anchors.map((anchor) => [anchor.landmark, anchor]));
     const fitting = fittingLandmarks.map((id) => {
@@ -332,14 +439,19 @@
     };
     const loss = () => {
       let value = 0, weights = 0;
+      const samples = [];
       for (const { id, anchor } of fitting) {
-        const projected2 = project(anchorPosition(anchor), camera);
+        const posed = rotate(anchorPosition(anchor), camera);
+        const projected2 = [camera.tx + posed[0] * camera.scale, camera.ty - posed[1] * camera.scale];
         const weight = (stableLandmarks.has(id) ? 2 : id === 13 || id === 14 ? 0.35 : 1) * landmarkWeights[id];
         const dx = (projected2[0] - observed[id][0]) / eyeDistance;
         const dy = (projected2[1] - observed[id][1]) / eyeDistance;
         value += weight * huber(Math.hypot(dx, dy));
         weights += weight;
+        samples.push({ z: posed[2] * camera.scale / eyeDistance, observedZ: -observed[id][2] / eyeDistance, weight });
       }
+      const depthOrigin = samples.reduce((sum, sample) => sum + sample.weight * (sample.z - sample.observedZ), 0) / weights;
+      for (const sample of samples) value += 0.18 * depthConfidence * sample.weight * huber(Math.abs(sample.z - sample.observedZ - depthOrigin));
       const prior = Object.values(params).reduce((sum, p) => sum + p * p, 0) * 25e-6;
       const expressionLoss = Object.entries(expression).reduce((sum, [key, p]) => sum + (p - expressionPrior[key]) ** 2, 0) * 2e-4;
       return value / weights + prior + expressionLoss;
@@ -380,16 +492,24 @@
     }
     const inferred = inferHeadGeometry(analysis, template, params);
     Object.assign(params, inferred.params);
-    const projected = template.positions.slice(0, template.canonicalCount).map((point, vertex) => project(deformPoint(point, template.parts[vertex], params, expression), camera));
-    const squared = fitting.reduce((sum, { id }) => sum + landmarkWeights[id] * ((projected[id][0] - observed[id][0]) ** 2 + (projected[id][1] - observed[id][1]) ** 2), 0);
-    const normalizedError = Math.sqrt(squared / fitting.reduce((sum, { id }) => sum + landmarkWeights[id], 0)) / eyeDistance;
+    const error = (points) => {
+      const squared = fitting.reduce((sum, { id }) => sum + landmarkWeights[id] * ((points[id][0] - observed[id][0]) ** 2 + (points[id][1] - observed[id][1]) ** 2), 0);
+      return Math.sqrt(squared / fitting.reduce((sum, { id }) => sum + landmarkWeights[id], 0)) / eyeDistance;
+    };
+    const coarseNormalizedError = error(facePositions(template, params, void 0, expression).map((point) => project(point, camera)));
+    const identity = fitFaceIdentity(template, analysis, params, expression, camera, landmarkWeights);
+    const projected = facePositions(template, params, identity, expression).map((point) => project(point, camera));
+    const normalizedError = error(projected);
+    const measurements = { ...inferred.measurements, ...measureFaceProportions(analysis, template, params, identity) };
     const warnings = [];
     if (visibleEyes < 0.45) warnings.push("V\xF9ng m\u1EAFt b\u1ECB che ho\u1EB7c \u0111\u01B0\u1EE3c \u0111\xE1nh d\u1EA5u c\xF3 k\xEDnh: gi\u1EEF h\xECnh m\u1EAFt m\u1EABu, c\xF3 th\u1EC3 ch\u1EC9nh \u0111\u1ED9 m\u1EDF/nghi\xEAng m\u1EAFt.");
     if (fitting.filter(({ id }) => landmarkWeights[id] < 0.4).length > 5) warnings.push("\u0110\xE3 gi\u1EA3m \u1EA3nh h\u01B0\u1EDFng c\u1EE7a v\xF9ng c\xF3 t\xF3c/ph\u1EE5 ki\u1EC7n l\xEAn h\xECnh h\u1ECDc; ph\u1EA7n b\u1ECB che d\xF9ng h\xECnh d\u1EA1ng m\u1EABu.");
     if (Math.abs(camera.ry) > 0.35 || Math.abs(camera.rx) > 0.35) warnings.push("\u1EA2nh nghi\xEAng nhi\u1EC1u: v\xF9ng khu\u1EA5t d\xF9ng h\xECnh d\u1EA1ng m\u1EABu. N\xEAn th\u1EED \u1EA3nh g\u1EA7n ch\xEDnh di\u1EC7n.");
     if (expression.jawOpen > 0.25) warnings.push("Mi\u1EC7ng m\u1EDF: \u0111\u1EA7u xu\u1EA5t v\u1EC1 tr\u1EA1ng th\xE1i trung t\xEDnh; texture m\xF4i c\xF3 th\u1EC3 c\xF2n bi\u1EC3u c\u1EA3m.");
+    if (expression.smile > 0.35) warnings.push("\u1EA2nh \u0111ang c\u01B0\u1EDDi: \u0111\xE3 gi\u1EA3m hi\u1EC7u ch\u1EC9nh v\xF9ng mi\u1EC7ng; h\xECnh m\xF4i v\xE0 texture trung t\xEDnh v\u1EABn ch\u1EC9 l\xE0 \u01B0\u1EDBc l\u01B0\u1EE3ng.");
     if (normalizedError > 0.08) warnings.push("Sai s\u1ED1 kh\u1EDBp c\xF2n cao. Th\u1EED crop s\xE1t m\u1EB7t, \u1EA3nh th\u1EB3ng ho\u1EB7c ch\u1EC9nh c\xE1c thanh h\xECnh h\u1ECDc.");
-    return { params, measurements: inferred.measurements, expression, camera, projected, normalizedError, iterations, landmarkWeights, warnings };
+    if (identity.depthConfidence < 0.25) warnings.push("Chi\u1EC1u s\xE2u landmark thi\u1EBFu tin c\u1EADy: h\xECnh m\u0169i/m\xE1 d\u1EF1a nhi\u1EC1u v\xE0o m\u1EABu.");
+    return { params, identity, measurements, expression, camera, projected, normalizedError, coarseNormalizedError, iterations, landmarkWeights, warnings };
   }
 
   // src/core/skin.ts
@@ -487,7 +607,9 @@
         return point.map((value, axis) => {
           let total = 0;
           for (const id of adjacent) total += values[id][axis];
-          return value * (1 - count * beta) + total * beta;
+          const smooth = value * (1 - count * beta) + total * beta;
+          const retain = surface.detailWeights?.[index] ?? 0;
+          return smooth + (value - smooth) * retain;
         });
       };
       let nextVertex = surface.positions.length;
@@ -507,10 +629,12 @@
       subdividedFields = subdividedFields.map(subdivideValues);
       const photoPoints = surface.photoPoints ? subdivideValues(surface.photoPoints) : void 0;
       const parts = [...surface.parts], uv = [...surface.uv], skinFade = [...surface.skinFade];
+      const detailWeights = surface.detailWeights ? [...surface.detailWeights] : void 0;
       for (const { a, b } of edges.values()) {
         parts.push(surface.parts[a] === surface.parts[b] ? surface.parts[a] : "bridge");
         uv.push([(surface.uv[a][0] + surface.uv[b][0]) * 0.5, (surface.uv[a][1] + surface.uv[b][1]) * 0.5]);
         skinFade.push((surface.skinFade[a] + surface.skinFade[b]) * 0.5);
+        detailWeights?.push((surface.detailWeights[a] + surface.detailWeights[b]) * 0.5);
       }
       const triangles = [];
       for (const [a, b, c] of surface.triangles) {
@@ -521,7 +645,7 @@
       }
       const mouthRim = surface.mouthRim?.flatMap((id, i, rim) => [id, edges.get(edgeKey(id, rim[(i + 1) % rim.length])).vertex]);
       const neckRim = surface.neckRim?.flatMap((id, i, rim) => [id, edges.get(edgeKey(id, rim[(i + 1) % rim.length])).vertex]);
-      surface = { positions, parts, uv, triangles, skinFade, photoPoints, mouthRim, neckRim, faceTriangleCount: surface.faceTriangleCount * 4 };
+      surface = { positions, parts, uv, triangles, skinFade, photoPoints, detailWeights, mouthRim, neckRim, faceTriangleCount: surface.faceTriangleCount * 4 };
     }
     return { surface, fields: subdividedFields };
   }
@@ -620,7 +744,7 @@
     return distance;
   }
   function buildFeatureMask(analysis, width, height, eyeDistance) {
-    const size = 512, mask = new Float32Array(size * size), creaseMask = new Float32Array(size * size);
+    const size = 512, mask = new Float32Array(size * size);
     const featherWidth = eyeDistance * 0.035;
     const contours = [
       ...[...eyeContours, ...browContours].map(({ upper, lower }) => ({
@@ -628,24 +752,15 @@
         featherWidth
       })),
       { polygon: outerLip.map((id) => [analysis.landmarks[id][0] * width, analysis.landmarks[id][1] * height]), featherWidth },
-      // The eye contour follows the lash line, not the upper-lid fold. Preserve
-      // a narrow strip above it so the source portrait's double-eyelid crease
-      // survives skin relighting without retaining the whole brow-to-eye area.
-      ...eyeContours.map(({ upper }) => {
-        const creaseOffset = eyeDistance * 0.03;
-        const creaseDepth = eyeDistance * 0.045;
-        const upperPoints = upper.map((id) => [analysis.landmarks[id][0] * width, analysis.landmarks[id][1] * height]);
-        return {
-          polygon: [
-            ...upperPoints.map(([x, y]) => [x, y - creaseOffset]),
-            ...[...upperPoints].reverse().map(([x, y]) => [x, y - creaseOffset + creaseDepth])
-          ],
-          featherWidth: eyeDistance * 0.018,
-          crease: true
-        };
-      })
+      // Keep the actual skin between lash and surrounding lid landmarks. This
+      // preserves visible folds (or their absence) without guessing a crease
+      // height, drawing one, or darkening every upper eyelid alike.
+      ...eyeContours.map(({ upper, lid }) => ({
+        polygon: [...lid, ...[...upper].reverse()].map((id) => [analysis.landmarks[id][0] * width, analysis.landmarks[id][1] * height]),
+        featherWidth: eyeDistance * 0.018
+      }))
     ];
-    for (const { polygon, featherWidth: contourFeather, crease } of contours) {
+    for (const { polygon, featherWidth: contourFeather } of contours) {
       const left = Math.max(0, Math.floor((Math.min(...polygon.map((point) => point[0])) - contourFeather) / width * size));
       const right = Math.min(size - 1, Math.ceil((Math.max(...polygon.map((point) => point[0])) + contourFeather) / width * size));
       const top = Math.max(0, Math.floor((Math.min(...polygon.map((point) => point[1])) - contourFeather) / height * size));
@@ -660,10 +775,9 @@
         const weight = inside ? 1 : 1 - feather(0, contourFeather, boundaryDistance([px, py], polygon));
         const index = y * size + x;
         mask[index] = Math.max(mask[index], weight);
-        if (crease) creaseMask[index] = Math.max(creaseMask[index], weight);
       }
     }
-    return { mask, crease: creaseMask, size };
+    return { mask, size };
   }
   function surfaceBoundaryLoop(triangles, startHint) {
     const edges = /* @__PURE__ */ new Map();
@@ -932,13 +1046,6 @@
       x / width * features.size - 0.5,
       y / height * features.size - 0.5
     );
-    const creasePreserveWeight = (x, y) => bilinear(
-      features.crease,
-      features.size,
-      features.size,
-      x / width * features.size - 0.5,
-      y / height * features.size - 0.5
-    );
     const foreheadLeft = analysis.landmarks[127][0] * width - eyeDistance * 0.02;
     const foreheadRight = analysis.landmarks[356][0] * width + eyeDistance * 0.02;
     const foreheadTop = analysis.landmarks[10][1] * height;
@@ -1121,7 +1228,8 @@
     }
     const faceTriangles = mouthSurfaceTriangles(template.triangles.slice(0, template.faceTriangleCount));
     const surface = smoothHeadSurface({
-      positions: template.positions.slice(0, template.canonicalCount).map((point) => deformPoint(point, "face", fit.params, fit.expression)),
+      positions: facePositions(template, fit.params, fit.identity, fit.expression),
+      detailWeights: fit.identity ? faceDetailWeights(template) : void 0,
       photoPoints: analysis.landmarks.slice(0, template.canonicalCount).map(([x, y]) => [x * width, y * height]),
       uv: template.uv.slice(0, template.canonicalCount),
       parts: Array(template.canonicalCount).fill("face"),
@@ -1243,14 +1351,10 @@
           beardWeight = filledBeardWeight;
         }
         const index = (y * size + x) * 4;
-        const creaseWeight = px >= 0 && py >= 0 && px < width && py < height ? creasePreserveWeight(px, py) : 0;
-        featureWeight = Math.max(featureWeight, creaseWeight);
         const sourceLight = luminance(...source);
         const contrast = Math.abs(sourceLight - lowLight) / Math.max(lowLight, 5e-3);
         const skinDetailGain = 1 / Math.sqrt(1 + (contrast / 0.35) ** 2);
         const detailStrength = 0.55 * skinDetailGain * (1 - featureWeight) + featureWeight;
-        const creaseDarkness = feather(0.04, 0.16, (lowLight - sourceLight) / Math.max(lowLight, 5e-3));
-        const creaseContrast = 1 + creaseWeight * creaseDarkness * 0.65;
         const relightStrength = 0.5 * (1 - featureWeight);
         const baseColor = [0, 1, 2].map((channel) => skinColors[tri[0]][channel] * a + skinColors[tri[1]][channel] * b + skinColors[tri[2]][channel] * c);
         const baseLight = luminance(...baseColor);
@@ -1259,7 +1363,7 @@
         for (let channel = 0; channel < 3; channel++) {
           const relit = baseColor[channel] * relightStrength + low[channel] * (1 - relightStrength);
           atlas[index + channel] = linearToSrgb(
-            (baseColor[channel] * (1 - alpha) + relit * alpha + (source[channel] - low[channel]) * alpha * detailStrength * beardContrast * creaseContrast) * beardShade
+            (baseColor[channel] * (1 - alpha) + relit * alpha + (source[channel] - low[channel]) * alpha * detailStrength * beardContrast) * beardShade
           );
         }
         covered[y * size + x] = 1;
@@ -1302,7 +1406,7 @@
       try {
         texture = buildTexture(template, fit, analysis, pixels, width, height);
       } catch {
-        fit.warnings.push("Kh\xF4ng t\u1EA1o \u0111\u01B0\u1EE3c b\u1EA3n chi\u1EBFu \u1EA3nh c\u0169 \u0111\u1EC3 \u0111\u1ED1i chi\u1EBFu. \u0110\u1EA7u d\u1EF1ng h\xECnh v\xE0 m\xE0u da v\u1EABn s\u1EED d\u1EE5ng \u0111\u01B0\u1EE3c.");
+        fit.warnings.push("Kh\xF4ng t\u1EA1o \u0111\u01B0\u1EE3c texture t\u1EEB \u1EA3nh. \u0110ang hi\u1EC3n th\u1ECB h\xECnh h\u1ECDc v\u1EDBi m\xE0u da \u01B0\u1EDBc l\u01B0\u1EE3ng; chi ti\u1EBFt m\u1EAFt/m\xF4i t\u1EEB \u1EA3nh ch\u01B0a \u0111\u01B0\u1EE3c gi\u1EEF.");
       }
       const transfer = [];
       if (texture.atlas) transfer.push(texture.atlas.buffer);

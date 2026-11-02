@@ -57,7 +57,8 @@ Metadata giấy phép FaceVerse giữ nguyên trạng thái chưa xác minh quy�
 - Crop và xoay, xử lý orientation ảnh; ảnh lớn được giảm còn tối đa 2048 px trước crop 1024 px.
 - MediaPipe CPU/WASM trong classic worker: phát hiện 478 landmark, kiểm tra một mặt, mask tóc/da.
 - Mesh đầu–cổ thủ tục: loft liền từ đường viền mặt qua đỉnh sọ, chẩm và gáy xuống đáy cổ; profile riêng cho vùng dưới cằm và cổ trước; cổ mở rộng về đáy; tai lấy hình học từ mesh FaceVerse trung tính local, cùng màu da theo ảnh.
-- Anchor barycentric có phiên bản; 23 tham số hình học, tối ưu Huber 2D reprojection + prior, pose/camera và ba tham số biểu cảm riêng. Có bounds, early stop và time budget.
+- Anchor barycentric có phiên bản; khớp pose/camera và tham số tổng thể bằng Huber 2D cùng chiều sâu tương đối có trọng số thấp hơn. Hiệu chỉnh cục bộ 468 đỉnh theo từng ảnh, có regularization, giới hạn dịch chuyển và giảm ảnh hưởng vùng bị che; số vòng cố định để không phụ thuộc tốc độ máy.
+- Làm mịn có giữ đường viền mặt, mũi và độ mở mắt; giữ texture mí thật, không đắp nếp mí với độ cao cố định. Dữ liệu đầu mới lưu trường biến dạng riêng để dựng lại và đổi style không mất hình dạng đã khớp.
 - Texture ảnh theo correspondence, kiểm tra hướng/độ sâu, mask tóc, giữ lông mày, blend ra màu da ở viền; vùng khuất không lặp khuôn mặt.
 - Natural, Cartoon, Caricature; 8 thanh chỉnh mesh và da phẳng; thay style không cộng dồn biến dạng.
 - Sáu preset theo mobile: Unbothered, Locked in, Cracking up, Full panic, Big winner, Spectacular flop. Delta FaceVerse chuyển sang cage mặt hiện tại; mức độ 0–100% tương ứng trọng số 0–2, nút trung tính đặt weights về 0.
@@ -66,6 +67,8 @@ Metadata giấy phép FaceVerse giữ nguyên trạng thái chưa xác minh quy�
 - So sánh tối đa 5 kết quả trong RAM; overlay landmark; thời gian theo bước và p50/p95 của phiên; tải số đo JSON không chứa ảnh/landmark.
 
 ## Trạng thái kiểm chứng
+
+Thay đổi ngày 02/11/2026 bổ sung hiệu chỉnh hình mặt và bỏ nếp mí thủ tục. Chiều sâu MediaPipe vẫn là dự đoán, không phải phép đo mũi/má; phần sọ phía khuất vẫn là prior. Đây chưa phải xác nhận production hoặc tái dựng chính xác danh tính. Phạm vi xem thử local được ghi tại [biên bản hiệu chỉnh mặt](docs/VALIDATION_IDENTITY_2026-11-02.md).
 
 Đã tách thư viện dùng chung và demo, hợp nhất worker hỗ trợ crop thủ công/tự động, chuyển app sang liên kết local. **Chưa chạy test, build, lint, formatter, typecheck hoặc nghiệm thu browser cho lần tách này**. Các kết quả bên dưới thuộc phiên bản trước, không xác nhận chất lượng hoặc hiệu năng của phiên bản hiện tại.
 

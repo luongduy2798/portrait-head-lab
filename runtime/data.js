@@ -13,6 +13,7 @@ export function portraitHeadData(result) {
         schemaVersion: 1, generator: 'portrait-head-procedural-v1',
         sourceCommit: '9b8fb0355f628d56783e361f30ed3022fa70b710',
         params: { ...fit.params }, measurements: { ...fit.measurements }, camera: { ...fit.camera }, appearance,
+        ...(fit.identity ? { identity: { ...fit.identity, deltas: fit.identity.deltas.map((delta) => [...delta]) } } : {}),
     };
 }
 const record = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -28,6 +29,13 @@ export function isPortraitHeadData(value) {
             .every((key) => finite(value.measurements[key])) || !record(value.appearance))
         return false;
     const appearance = value.appearance;
+    if (value.identity !== undefined) {
+        const identity = value.identity;
+        if (!record(identity) || identity.version !== 1 || !finite(identity.depthConfidence) || identity.depthConfidence < 0 || identity.depthConfidence > 1 ||
+            !Array.isArray(identity.deltas) || identity.deltas.length !== 468 ||
+            !identity.deltas.every((delta) => point(delta) && delta.every((coordinate) => Math.abs(coordinate) <= 5)))
+            return false;
+    }
     const map = (data, size, maximum, byte) => finite(size) && Number.isInteger(size) && size > 0 && size <= maximum &&
         (data === null || (byte ? data instanceof Uint8ClampedArray : data instanceof Float32Array) &&
             data.length === size * size * 4);

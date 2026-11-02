@@ -1,10 +1,11 @@
-import type { CameraFit, HeadMeasurements, HeadResult, ShapeParams } from './core/types.js';
+import type { CameraFit, FaceIdentity, HeadMeasurements, HeadResult, ShapeParams } from './core/types.js';
 
 export interface PortraitHeadData {
   schemaVersion: 1;
   generator: 'portrait-head-procedural-v1';
   sourceCommit: '9b8fb0355f628d56783e361f30ed3022fa70b710';
   params: ShapeParams;
+  identity?: FaceIdentity;
   measurements: HeadMeasurements;
   camera: CameraFit;
   appearance: Omit<HeadResult, 'fit' | 'timings'>;
@@ -25,6 +26,7 @@ export function portraitHeadData(result: HeadResult): PortraitHeadData {
     schemaVersion: 1, generator: 'portrait-head-procedural-v1',
     sourceCommit: '9b8fb0355f628d56783e361f30ed3022fa70b710',
     params: { ...fit.params }, measurements: { ...fit.measurements }, camera: { ...fit.camera }, appearance,
+    ...(fit.identity ? { identity: { ...fit.identity, deltas: fit.identity.deltas.map((delta) => [...delta] as [number, number, number]) } } : {}),
   };
 }
 
@@ -41,6 +43,12 @@ export function isPortraitHeadData(value: unknown): value is PortraitHeadData {
     !['faceAspectRatio', 'foreheadScale', 'cheekScale', 'jawScale', 'lowerJawScale', 'chinScale']
       .every((key) => finite((value.measurements as Record<string, unknown>)[key])) || !record(value.appearance)) return false;
   const appearance = value.appearance;
+  if (value.identity !== undefined) {
+    const identity = value.identity;
+    if (!record(identity) || identity.version !== 1 || !finite(identity.depthConfidence) || identity.depthConfidence < 0 || identity.depthConfidence > 1 ||
+      !Array.isArray(identity.deltas) || identity.deltas.length !== 468 ||
+      !identity.deltas.every((delta) => point(delta) && (delta as number[]).every((coordinate) => Math.abs(coordinate) <= 5))) return false;
+  }
   const map = (data: unknown, size: unknown, maximum: number, byte: boolean) =>
     finite(size) && Number.isInteger(size) && size > 0 && size <= maximum &&
     (data === null || (byte ? data instanceof Uint8ClampedArray : data instanceof Float32Array) &&

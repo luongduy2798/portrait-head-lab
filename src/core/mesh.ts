@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { clamp, deformPoint, rotate, styledParams } from './shape.js';
+import { clamp, rotate, styledParams } from './shape.js';
+import { faceDetailWeights, facePositions } from './identity.js';
 import type { EarTemplate } from './ears.js';
 import { expressionControls, expressionIntensityMultiplier, expressionSet, retargetExpressionDeltas, updateExpressionBounds } from './expressions.js';
 import type { ExpressionRigAsset } from './expression-rig.js';
@@ -7,8 +8,7 @@ import { addOralCavity } from './oral-cavity.js';
 import { lowerLipRim, mouthSurfaceTriangles, upperLipRim } from './mouth.js';
 import { createSkinField, linearToSrgb, srgbToLinear, type SkinColorField } from './skin.js';
 import { smoothHeadSurface, smoothHeadSurfaceFields, type HeadSurface } from './subdivision.js';
-import { eyeContours } from './visibility.js';
-import type { HeadMeasurements, HeadPart, HeadResult, HeadTemplate, Point2, Point3, ShapeParams, Style } from './types.js';
+import type { FaceIdentity, HeadMeasurements, HeadPart, HeadResult, HeadTemplate, Point2, Point3, ShapeParams, Style } from './types.js';
 
 const smoothstep = (value: number) => {
   const t = clamp(value, 0, 1);
@@ -131,72 +131,6 @@ export function computeSmoothNormals(geometry: THREE.BufferGeometry) {
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
 }
 
-/** Sculpt the upper-eyelid fold on the refined face surface. Doing this after
- * subdivision keeps the ridge local and prevents Loop smoothing from erasing
- * the relief; the atlas continues to supply the source photo's crease detail. */
-function sculptUpperEyelidFolds(surface: HeadSurface): HeadSurface {
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(surface.positions.flat(), 3));
-  geometry.setIndex(surface.triangles.slice(0, surface.faceTriangleCount).flat());
-  computeSmoothNormals(geometry);
-  const normals = geometry.getAttribute('normal');
-  const sculpted = surface.positions.map((point): Point3 => [...point]);
-
-  for (const { upper } of eyeContours) {
-    const contour = upper.map((id) => new THREE.Vector3(...surface.positions[id]));
-    const curve = new THREE.CatmullRomCurve3(contour, false, 'centripetal');
-    const eyeWidth = contour[0].distanceTo(contour[contour.length - 1]);
-    const makePath = (offset: number) => Array.from({ length: 65 }, (_, index) => {
-      const t = index / 64;
-      const taper = Math.pow(Math.sin(Math.PI * t), 0.75);
-      const point = curve.getPoint(t);
-      point.y += eyeWidth * offset * taper;
-      return { point, taper };
-    });
-    // Keep the raised lid just above the lash contour and place its crease
-    // where the source-photo fold is preserved in the UV texture (~0.045 eye
-    // widths). A crease twice as high as the photo detail reads as one flat lid.
-    const foldPath = makePath(0.02);
-    const creasePath = makePath(0.05);
-    const foldWidth = eyeWidth * 0.035;
-    const creaseWidth = eyeWidth * 0.022;
-    const foldHeight = eyeWidth * 0.055;
-    const creaseDepth = eyeWidth * 0.06;
-    const minX = Math.min(...contour.map((point) => point.x)) - eyeWidth * 0.08;
-    const maxX = Math.max(...contour.map((point) => point.x)) + eyeWidth * 0.08;
-    const minY = Math.min(...contour.map((point) => point.y)) - eyeWidth * 0.04;
-    const maxY = Math.max(...contour.map((point) => point.y)) + eyeWidth * 0.25;
-
-    for (let id = 0; id < surface.positions.length; id++) {
-      if (surface.parts[id] !== 'face') continue;
-      const [x, y] = surface.positions[id];
-      if (x < minX || x > maxX || y < minY || y > maxY) continue;
-      const weightAt = (path: typeof foldPath, width: number) => {
-        let nearest = Infinity, taper = 0;
-        for (const sample of path) {
-          const distance = Math.hypot(x - sample.point.x, y - sample.point.y);
-          if (distance < nearest) { nearest = distance; taper = sample.taper; }
-        }
-        if (nearest > width * 3 || taper < 0.01) return 0;
-        return Math.exp(-0.5 * (nearest / width) ** 2) * taper;
-      };
-      const foldWeight = weightAt(foldPath, foldWidth);
-      const creaseWeight = weightAt(creasePath, creaseWidth);
-      const height = foldHeight * foldWeight - creaseDepth * creaseWeight;
-      if (Math.abs(height) < 0.0001) continue;
-      const normal = new THREE.Vector3().fromBufferAttribute(normals, id);
-      sculpted[id] = [
-        sculpted[id][0] + normal.x * height,
-        sculpted[id][1] + normal.y * height,
-        sculpted[id][2] + normal.z * height,
-      ];
-    }
-  }
-
-  geometry.dispose();
-  return { ...surface, positions: sculpted };
-}
-
 /**
  * Build the head from the original 468-point face surface. The skull is a
  * continuous loft from the face boundary over the crown and occiput to the
@@ -230,7 +164,7 @@ function measuredContourScale(vertical: number, measurements?: HeadMeasurements)
   return measurements.foreheadScale;
 }
 
-function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measurements?: HeadMeasurements, includeOralCavity = true, openNeck = false): NaturalHead {
+function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measurements?: HeadMeasurements, includeOralCavity = true, openNeck = false, correction?: FaceIdentity): NaturalHead {
   const canonicalCount = template.canonicalCount;
   if (
     canonicalCount !== 468 || template.positions.length < canonicalCount ||
@@ -238,7 +172,7 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measureme
     template.boundary.length < 24 || template.faceTriangleCount !== 898
   ) throw new Error('Template mặt canonical không đủ dữ liệu để tự sinh mesh đầu–cổ.');
 
-  const identity = template.positions.slice(0, canonicalCount).map((point) => deformPoint(point, 'face', params));
+  const identity = facePositions(template, params, correction);
   const neutral = closeNeutralLips(identity);
   const positions = [...neutral];
   const parts: HeadPart[] = Array(canonicalCount).fill('face');
@@ -385,7 +319,11 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measureme
   }
 
   const mouthRim = [...upperLipRim, ...lowerLipRim.slice(1, -1).reverse()];
-  const cage: HeadSurface = { positions: relaxNapeCage(positions, triangles, canonicalCount, lastProfile[0], headScale), parts, uv, triangles, skinFade, faceTriangleCount, mouthRim, neckRim: openNeck ? baseRing : undefined };
+  const detailWeights = correction ? [
+    ...faceDetailWeights(template),
+    ...positions.slice(canonicalCount).map((_, id) => id < boundary.length ? 0.3 : 0),
+  ] : undefined;
+  const cage: HeadSurface = { positions: relaxNapeCage(positions, triangles, canonicalCount, lastProfile[0], headScale), parts, uv, triangles, skinFade, detailWeights, faceTriangleCount, mouthRim, neckRim: openNeck ? baseRing : undefined };
   return { identity, neutral, cage };
 }
 
@@ -794,7 +732,7 @@ export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: Exp
   const includeExpressions = options.includeExpressions ?? Boolean(rig);
   const includeEars = options.includeEars ?? Boolean(ears);
   const includeOralCavity = options.includeOralCavity ?? Boolean(rig);
-  const natural = buildNaturalHead(template, effective, result?.fit.measurements, includeOralCavity, options.openNeck);
+  const natural = buildNaturalHead(template, effective, result?.fit.measurements, includeOralCavity, options.openNeck, result?.fit.identity);
   let generated: HeadSurface;
   let deltaSurfaces: Point3[][] = [];
   if (includeExpressions && rig) {
@@ -805,7 +743,6 @@ export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: Exp
   } else {
     generated = smoothHeadSurface(natural.cage);
   }
-  generated = sculptUpperEyelidFolds(generated);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(generated.positions.flatMap(meters), 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(generated.uv.flat(), 2));

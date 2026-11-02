@@ -20,4 +20,6 @@ Từ thư mục `demo/`, chạy `npm run dev` và mở `http://localhost:5187`. 
 
 Đánh giá likeness cần 30–50 ảnh có quyền dùng và người chấm: front/¾, Natural/Cartoon riêng. Không dùng NME thay blind test. Ưu tiên kiểm tra mặt béo/gầy, hàm rộng/hẹp, ảnh có kính và độ tự nhiên của gáy/cổ ở góc nghiêng.
 
+Cho hiệu chỉnh identity (02/11/2026): đối chiếu độ mở mắt, nếp mí có/không có trong ảnh, sống mũi và hõm má ở front/¾ với cả texture và Da phẳng. So sai số khớp tổng thể và sau hiệu chỉnh nhưng không dùng mức giảm đó làm kết luận độ giống. Dựng lại từ `portraitHeadData()` phải giữ trường biến dạng; record cũ vẫn mở được. Khi được yêu cầu kiểm tra kỹ thuật, bổ sung trường hợp Z phẳng/ngoại lệ, vùng mắt che kín, pose nghiêng, biểu cảm, đổi style/slider rồi reset, và GLB round-trip. Các trường hợp chưa thực hiện cần ghi riêng trong biên bản.
+
 Nếu được yêu cầu kiểm tra kỹ thuật, `npm run build` trong `demo/` chạy TypeScript + Vite của demo. Chưa thêm unit test chỉ để mô phỏng implementation; các kiểm tra có giá trị tiếp theo là synthetic fitting với pose biết trước, occlusion/UV raster, bounds GLB round-trip và cancel race trên browser thật.

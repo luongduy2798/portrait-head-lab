@@ -69,6 +69,8 @@ Nguồn và giấy phép: [THIRD_PARTY_ASSETS](THIRD_PARTY_ASSETS.md). Việc đ
 
 ## API nâng cao và demo
 
+Dữ liệu `PortraitHeadData` schema 1 có thêm trường tùy chọn `identity` phiên bản 1: 468 vector hiệu chỉnh trung tính theo centimetre canonical và trọng số chiều sâu. Đây là biến dạng đã fit, không phải landmark detector hay pixel nguồn. `portraitHeadData()` sao chép trường này và `restorePortraitHead()` áp dụng lại cùng tham số/texture. Record cũ thiếu trường vẫn dùng đường dựng theo tham số; record có trường sai phiên bản/kích thước/giá trị bị từ chối. Bỏ nếp mí thủ tục áp dụng cả khi dựng lại record cũ. Preview và GLB dùng cùng hình học đã hiệu chỉnh.
+
 Demo ở `demo/` có package/toolchain riêng và dùng các public API cấp thấp
 `HeadPipeline`, `loadTemplate`, `loadEarTemplate`, `loadExpressionRig`, `createHead`,
 shape/expression controls, `exportHead`, `inspectGLB` để giữ công cụ chẩn đoán.

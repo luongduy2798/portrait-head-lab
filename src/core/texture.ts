@@ -1,4 +1,5 @@
-import { clamp, deformPoint, rotate } from './shape.js';
+import { clamp, rotate } from './shape.js';
+import { faceDetailWeights, facePositions } from './identity.js';
 import { createSkinField, linearToSrgb, srgbToLinear } from './skin.js';
 import { smoothHeadSurface } from './subdivision.js';
 import { mouthSurfaceTriangles } from './mouth.js';
@@ -65,32 +66,23 @@ function boundaryDistance(point: Point2, boundary: Point2[]): number {
 /** Protect actual feature contours, not broad eye/nose/mouth ellipses that
  * also retain photo shadows across the temples and cheeks. */
 function buildFeatureMask(analysis: Analysis, width: number, height: number, eyeDistance: number) {
-  const size = 512, mask = new Float32Array(size * size), creaseMask = new Float32Array(size * size);
+  const size = 512, mask = new Float32Array(size * size);
   const featherWidth = eyeDistance * 0.035;
-  const contours: { polygon: Point2[]; featherWidth: number; crease?: boolean }[] = [
+  const contours: { polygon: Point2[]; featherWidth: number }[] = [
     ...[...eyeContours, ...browContours].map(({ upper, lower }) => ({
       polygon: [...upper, ...[...lower].reverse()].map((id): Point2 => [analysis.landmarks[id][0] * width, analysis.landmarks[id][1] * height]),
       featherWidth,
     })),
     { polygon: outerLip.map((id): Point2 => [analysis.landmarks[id][0] * width, analysis.landmarks[id][1] * height]), featherWidth },
-    // The eye contour follows the lash line, not the upper-lid fold. Preserve
-    // a narrow strip above it so the source portrait's double-eyelid crease
-    // survives skin relighting without retaining the whole brow-to-eye area.
-    ...eyeContours.map(({ upper }) => {
-      const creaseOffset = eyeDistance * 0.03;
-      const creaseDepth = eyeDistance * 0.045;
-      const upperPoints = upper.map((id): Point2 => [analysis.landmarks[id][0] * width, analysis.landmarks[id][1] * height]);
-      return {
-        polygon: [
-          ...upperPoints.map(([x, y]): Point2 => [x, y - creaseOffset]),
-          ...[...upperPoints].reverse().map(([x, y]): Point2 => [x, y - creaseOffset + creaseDepth]),
-        ],
-        featherWidth: eyeDistance * 0.018,
-        crease: true,
-      };
-    }),
+    // Keep the actual skin between lash and surrounding lid landmarks. This
+    // preserves visible folds (or their absence) without guessing a crease
+    // height, drawing one, or darkening every upper eyelid alike.
+    ...eyeContours.map(({ upper, lid }) => ({
+      polygon: [...lid, ...[...upper].reverse()].map((id): Point2 => [analysis.landmarks[id][0] * width, analysis.landmarks[id][1] * height]),
+      featherWidth: eyeDistance * 0.018,
+    })),
   ];
-  for (const { polygon, featherWidth: contourFeather, crease } of contours) {
+  for (const { polygon, featherWidth: contourFeather } of contours) {
     const left = Math.max(0, Math.floor((Math.min(...polygon.map((point) => point[0])) - contourFeather) / width * size));
     const right = Math.min(size - 1, Math.ceil((Math.max(...polygon.map((point) => point[0])) + contourFeather) / width * size));
     const top = Math.max(0, Math.floor((Math.min(...polygon.map((point) => point[1])) - contourFeather) / height * size));
@@ -105,10 +97,9 @@ function buildFeatureMask(analysis: Analysis, width: number, height: number, eye
       const weight = inside ? 1 : 1 - feather(0, contourFeather, boundaryDistance([px, py], polygon));
       const index = y * size + x;
       mask[index] = Math.max(mask[index], weight);
-      if (crease) creaseMask[index] = Math.max(creaseMask[index], weight);
     }
   }
-  return { mask, crease: creaseMask, size };
+  return { mask, size };
 }
 
 /** Recover the refined face edge so the photo feather follows the actual UV
@@ -420,8 +411,6 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
   const features = buildFeatureMask(analysis, width, height, eyeDistance);
   const featurePreserveWeight = (x: number, y: number) => bilinear(features.mask, features.size, features.size,
     x / width * features.size - 0.5, y / height * features.size - 0.5);
-  const creasePreserveWeight = (x: number, y: number) => bilinear(features.crease, features.size, features.size,
-    x / width * features.size - 0.5, y / height * features.size - 0.5);
   const foreheadLeft = analysis.landmarks[127][0] * width - eyeDistance * 0.02;
   const foreheadRight = analysis.landmarks[356][0] * width + eyeDistance * 0.02;
   const foreheadTop = analysis.landmarks[10][1] * height;
@@ -648,8 +637,8 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
   // visible kinks wherever a glasses frame crosses an original triangle edge.
   const faceTriangles = mouthSurfaceTriangles(template.triangles.slice(0, template.faceTriangleCount));
   const surface = smoothHeadSurface({
-    positions: template.positions.slice(0, template.canonicalCount)
-      .map((point) => deformPoint(point, 'face', fit.params, fit.expression)),
+    positions: facePositions(template, fit.params, fit.identity, fit.expression),
+    detailWeights: fit.identity ? faceDetailWeights(template) : undefined,
     photoPoints: analysis.landmarks.slice(0, template.canonicalCount).map(([x, y]): Point2 => [x * width, y * height]),
     uv: template.uv.slice(0, template.canonicalCount),
     parts: Array(template.canonicalCount).fill('face'),
@@ -765,16 +754,10 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
       // Compress extreme local contrast with one RGB gain to preserve hue.
       // The relative limit avoids adding the same harsh grain to dark skin
       // as to bright skin; protected features retain their source residual.
-      const creaseWeight = px >= 0 && py >= 0 && px < width && py < height ? creasePreserveWeight(px, py) : 0;
-      featureWeight = Math.max(featureWeight, creaseWeight);
       const sourceLight = luminance(...source);
       const contrast = Math.abs(sourceLight - lowLight) / Math.max(lowLight, 0.005);
       const skinDetailGain = 1 / Math.sqrt(1 + (contrast / 0.35) ** 2);
       const detailStrength = 0.55 * skinDetailGain * (1 - featureWeight) + featureWeight;
-      const creaseDarkness = feather(0.04, 0.16, (lowLight - sourceLight) / Math.max(lowLight, 0.005));
-      // Preserve the real source fold more strongly than ordinary skin pores;
-      // this amplifies existing crease pixels rather than painting a new line.
-      const creaseContrast = 1 + creaseWeight * creaseDarkness * 0.65;
       const relightStrength = 0.5 * (1 - featureWeight);
       const baseColor = [0, 1, 2].map((channel) => skinColors[tri[0]][channel] * a
         + skinColors[tri[1]][channel] * b + skinColors[tri[2]][channel] * c) as Point3;
@@ -790,7 +773,7 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
         const relit = baseColor[channel] * relightStrength + low[channel] * (1 - relightStrength);
         atlas[index + channel] = linearToSrgb(
           (baseColor[channel] * (1 - alpha) + relit * alpha
-            + (source[channel] - low[channel]) * alpha * detailStrength * beardContrast * creaseContrast) * beardShade,
+            + (source[channel] - low[channel]) * alpha * detailStrength * beardContrast) * beardShade,
         );
       }
       covered[y * size + x] = 1;

@@ -49,7 +49,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <section class="style-bar" aria-label="Phong cách"><div><span class="eyebrow">PHONG CÁCH</span><div class="style-options"><button data-style="natural" class="active">Natural</button><button data-style="cartoon">Cartoon</button><button data-style="caricature">Caricature</button></div></div><label class="strength-control">Mức cách điệu<input id="strength" type="range" min="0" max="1" step="0.01" value="0.5" /></label><label class="check"><input id="flat" type="checkbox" /> Da phẳng</label><label class="check"><input id="wireframe" type="checkbox" /> Lưới mesh</label><p class="helper texture-note">Kính và chi tiết khuôn mặt được giữ từ ảnh nguồn qua UV.</p></section>
       <section class="expression-bar" aria-labelledby="expression-title"><div class="expression-heading"><h2 id="expression-title">Biểu cảm</h2><label class="strength-control" for="expression-strength">Mức độ <output id="expression-value">80%</output><input id="expression-strength" type="range" min="0" max="1" step="0.01" value="0.8" disabled /></label></div><div id="expression-options" class="style-options expression-options" role="group" aria-label="Chọn biểu cảm"><button data-expression="neutral" class="active" aria-pressed="true" disabled>Trung tính</button>${expressionControls.map(([name, label]) => `<button data-expression="${name}" aria-pressed="false" disabled>${label}</button>`).join('')}</div><p id="expression-hint" class="helper">Chọn biểu cảm rồi kéo mức độ để điều chỉnh.</p></section>
       <div class="export-bar"><p id="result-summary">Chọn ảnh để bắt đầu. Đang hiển thị đầu mẫu.</p><button id="screenshot" class="button secondary" disabled>Ảnh PNG</button><button id="export" class="button primary" disabled>Tải head.glb <span aria-hidden="true">↓</span></button><label class="button ghost" for="glb">Mở GLB</label><input id="glb" class="sr-only" type="file" accept=".glb" /></div>
-      <details class="diagnostics"><summary>Chẩn đoán template & thời gian xử lý <span>+</span></summary><div class="diagnostic-content"><canvas id="overlay" width="512" height="512" aria-label="Landmark xanh là ảnh, cam là template tham chiếu"></canvas><div><p class="helper">Xanh: landmark ảnh · Cam: landmark template dùng để fit/texture. Sai số thấp không đồng nghĩa đã giống người thật.</p><div id="metrics">Chưa có dữ liệu. Thời gian được đo khi dựng từ ảnh.</div><button id="report" class="text-button" disabled>Tải số đo JSON (không chứa ảnh/landmark)</button></div></div></details>
+      <details class="diagnostics"><summary>Chẩn đoán khớp mặt & thời gian xử lý <span>+</span></summary><div class="diagnostic-content"><canvas id="overlay" width="512" height="512" aria-label="Landmark xanh là ảnh, cam là mặt đã khớp"></canvas><div><p class="helper">Xanh: landmark ảnh · Cam: mặt đã khớp trước làm mịn. Sai số thấp không đồng nghĩa đã giống người thật hoặc khôi phục đúng chiều sâu.</p><div id="metrics">Chưa có dữ liệu. Thời gian được đo khi dựng từ ảnh.</div><button id="report" class="text-button" disabled>Tải số đo JSON (không chứa ảnh/landmark)</button></div></div></details>
       <section class="comparison"><div class="section-title"><h2><span>03</span> So sánh trong phiên</h2><button id="clear-history" class="text-button">Xóa ảnh so sánh</button></div><p class="helper">Giữ tối đa 5 cặp ảnh nguồn / kết quả. Chỉ trong tab hiện tại, không lưu xuống ổ đĩa.</p><div id="history"><p class="empty">Các kết quả dựng sẽ xuất hiện ở đây.</p></div></section>
     </div>
   </main>
@@ -256,7 +256,7 @@ function drawDiagnostics(crop: HTMLCanvasElement, detected: Analysis, generated:
     const values = timings.map((entry) => entry[key]).filter(Number.isFinite).sort((a, b) => a - b);
     return values.length ? values[Math.min(values.length - 1, Math.ceil(percentile * values.length) - 1)].toFixed(0) : '—';
   };
-  const labels: Record<string, string> = { initialize: 'Khởi tạo MediaPipe', detect: 'Landmark', segment: 'Tách tóc/da', fit: 'Khớp template tham chiếu', texture: 'Texture ảnh', warm: 'Xử lý (trừ khởi tạo)', total: 'Tổng' };
+  const labels: Record<string, string> = { initialize: 'Khởi tạo MediaPipe', detect: 'Landmark', segment: 'Tách tóc/da', fit: 'Khớp hình mặt', texture: 'Texture ảnh', warm: 'Xử lý (trừ khởi tạo)', total: 'Tổng' };
   element('metrics').innerHTML = `<div class="metric-highlight"><strong>${(generated.fit.normalizedError * 100).toFixed(2)}%</strong><span>NME / khoảng cách hai đuôi mắt<br>${generated.fit.iterations} vòng tối ưu · ${timings.length} lần dựng</span></div><table><thead><tr><th>Bước</th><th>Lần này</th><th>p50</th><th>p95</th></tr></thead><tbody>${Object.entries(labels).map(([key, label]) => `<tr><td>${label}</td><td>${generated.timings[key].toFixed(0)} ms</td><td>${p(key, 0.5)}</td><td>${p(key, 0.95)}</td></tr>`).join('')}</tbody></table><p class="helper">Số đo của phiên trên máy này; chưa phải benchmark đa thiết bị. Lần dựng đầu có tải/khởi tạo; warm chưa tính export và thời gian vẽ preview.</p>`;
   button('report').disabled = false;
 }
@@ -283,7 +283,7 @@ button('generate').addEventListener('click', async () => {
     refreshMesh(true); updateSliders(); viewer.angle('front');
     const front = viewer.snapshot(240); viewer.angle('quarter'); const quarter = viewer.snapshot(240); viewer.angle('back'); const back = viewer.snapshot(240); viewer.angle('front');
     history.unshift({ source: thumbnail(crop), front, quarter, back, error: result.fit.normalizedError }); if (history.length > 5) history.pop(); renderHistory();
-    element('model-status').textContent = 'Mặt gốc + sọ/tai/cổ';
+    element('model-status').textContent = 'Đầu ước lượng theo ảnh';
     element('result-summary').textContent = `Đầu 3D · ${vertexCount().toLocaleString('vi')} đỉnh · ${(result.timings.total / 1000).toFixed(2)} giây xử lý ảnh · 6 biểu cảm`;
     drawDiagnostics(crop, analysis, result);
     if (result.fit.warnings.length) showError(result.fit.warnings.join(' '));
@@ -356,7 +356,7 @@ input('glb').addEventListener('change', async () => {
   finally { exporting = false; input('glb').value = ''; setBusy(false); }
 });
 button('report').addEventListener('click', () => {
-  const report = { app: 'portrait-head-lab/0.1.0', browser: navigator.userAgent, cpuThreads: navigator.hardwareConcurrency, sampleCount: timings.length, runs: timings, currentNormalizedError: result?.fit.normalizedError, currentStyle, note: 'Số đo của phiên này; không gồm ảnh, landmark hay thông số nhận dạng.' };
+  const report = { app: 'portrait-head-lab/0.1.0', browser: navigator.userAgent, cpuThreads: navigator.hardwareConcurrency, sampleCount: timings.length, runs: timings, currentNormalizedError: result?.fit.normalizedError, coarseNormalizedError: result?.fit.coarseNormalizedError, currentStyle, note: 'Sai số cage trước làm mịn; không đo độ giống hoặc độ chính xác chiều sâu. Không gồm ảnh, landmark hay thông số nhận dạng.' };
   download(JSON.stringify(report, null, 2), 'head-lab-metrics.json', 'application/json');
 });
 button('clear-history').addEventListener('click', () => { history.length = 0; renderHistory(); });

@@ -1,9 +1,10 @@
-import type { CameraFit, HeadMeasurements, HeadResult, ShapeParams } from './core/types.js';
+import type { CameraFit, FaceIdentity, HeadMeasurements, HeadResult, ShapeParams } from './core/types.js';
 export interface PortraitHeadData {
     schemaVersion: 1;
     generator: 'portrait-head-procedural-v1';
     sourceCommit: '9b8fb0355f628d56783e361f30ed3022fa70b710';
     params: ShapeParams;
+    identity?: FaceIdentity;
     measurements: HeadMeasurements;
     camera: CameraFit;
     appearance: Omit<HeadResult, 'fit' | 'timings'>;

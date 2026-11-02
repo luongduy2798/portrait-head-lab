@@ -1,4 +1,5 @@
-import { clamp, deformPoint, project, shapeControls } from './shape.js';
+import { clamp, deformPoint, project, rotate, shapeControls } from './shape.js';
+import { facePositions, fitFaceIdentity, relativeDepthConfidence } from './identity.js';
 import { eyeVisibility, landmarkVisibility, maskAt } from './visibility.js';
 const fittingLandmarks = [10, 21, 54, 67, 103, 109, 127, 162, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323, 454, 356, 389, 251, 284, 332, 297, 338, 33, 133, 159, 145, 263, 362, 386, 374, 70, 63, 105, 66, 107, 336, 296, 334, 293, 300, 1, 2, 4, 5, 6, 98, 327, 168, 195, 61, 291, 0, 17, 13, 14, 78, 308, 50, 280, 101, 330];
 const stableLandmarks = new Set([33, 133, 263, 362, 1, 2, 4, 5, 6, 98, 327, 168, 195]);
@@ -10,12 +11,11 @@ function localizeLandmarks(points, width, height) {
     const cosine = Math.cos(angle), sine = Math.sin(angle);
     return scaled.map(([x, y]) => [x * cosine + y * sine, -x * sine + y * cosine]);
 }
-function measureFaceProportions(analysis, template, params) {
+function measureFaceProportions(analysis, template, params, identity) {
     const imageWidth = analysis.maskWidth > 0 ? analysis.maskWidth : 1;
     const imageHeight = analysis.maskHeight > 0 ? analysis.maskHeight : 1;
     const observed = localizeLandmarks(analysis.landmarks, imageWidth, imageHeight);
-    const fittedPositions = template.positions.slice(0, template.canonicalCount)
-        .map((point, index) => deformPoint(point, template.parts[index], params));
+    const fittedPositions = facePositions(template, params, identity);
     const canonical = localizeLandmarks(fittedPositions, 1, 1);
     const widthAt = (points, a, b) => Math.abs(points[a][0] - points[b][0]);
     const heightAt = (points) => Math.abs(points[152][1] - points[10][1]);
@@ -183,6 +183,7 @@ export function fitHead(template, anchors, analysis, options = { occludedEyes: f
     if (observed.length !== 478 || observed.some((point) => point.some((v) => !Number.isFinite(v))))
         throw new Error('Landmark không hợp lệ.');
     const landmarkWeights = landmarkVisibility(analysis, options);
+    const depthConfidence = relativeDepthConfidence(analysis);
     const visibleEyes = eyeVisibility(landmarkWeights);
     const byId = new Map(anchors.map((anchor) => [anchor.landmark, anchor]));
     const fitting = fittingLandmarks.map((id) => {
@@ -223,22 +224,31 @@ export function fitHead(template, anchors, analysis, options = { occludedEyes: f
     };
     const loss = () => {
         let value = 0, weights = 0;
+        const samples = [];
         for (const { id, anchor } of fitting) {
-            const projected = project(anchorPosition(anchor), camera);
+            const posed = rotate(anchorPosition(anchor), camera);
+            const projected = [camera.tx + posed[0] * camera.scale, camera.ty - posed[1] * camera.scale];
             // Mouth/eyelid shape is less reliable as identity evidence during expression.
             const weight = (stableLandmarks.has(id) ? 2 : id === 13 || id === 14 ? 0.35 : 1) * landmarkWeights[id];
             const dx = (projected[0] - observed[id][0]) / eyeDistance;
             const dy = (projected[1] - observed[id][1]) / eyeDistance;
             value += weight * huber(Math.hypot(dx, dy));
             weights += weight;
+            samples.push({ z: posed[2] * camera.scale / eyeDistance, observedZ: -observed[id][2] / eyeDistance, weight });
         }
+        // Relative Z has an unknown origin. Center it before comparing, and give
+        // learned depth less influence than observed image contours. In frontal
+        // views this makes nose depth observable instead of leaving it at zero.
+        const depthOrigin = samples.reduce((sum, sample) => sum + sample.weight * (sample.z - sample.observedZ), 0) / weights;
+        for (const sample of samples)
+            value += 0.18 * depthConfidence * sample.weight * huber(Math.abs(sample.z - sample.observedZ - depthOrigin));
         const prior = Object.values(params).reduce((sum, p) => sum + p * p, 0) * 0.000025;
         const expressionLoss = Object.entries(expression).reduce((sum, [key, p]) => sum + (p - expressionPrior[key]) ** 2, 0) * 0.0002;
         return value / weights + prior + expressionLoss;
     };
     let best = loss(), iterations = 0;
-    // Identity basis bounds provide the bound term; symmetric Gaussian bases
-    // provide symmetry and smoothness by construction. No per-vertex fitting.
+    // Bounded procedural controls provide the coarse fit. Local identity
+    // corrections are solved separately after pose and expression stabilize.
     const optimize = (object, key, step, min, max) => {
         const original = object[key];
         let picked = original;
@@ -282,9 +292,16 @@ export function fitHead(template, anchors, analysis, options = { occludedEyes: f
     }
     const inferred = inferHeadGeometry(analysis, template, params);
     Object.assign(params, inferred.params);
-    const projected = template.positions.slice(0, template.canonicalCount).map((point, vertex) => project(deformPoint(point, template.parts[vertex], params, expression), camera));
-    const squared = fitting.reduce((sum, { id }) => sum + landmarkWeights[id] * ((projected[id][0] - observed[id][0]) ** 2 + (projected[id][1] - observed[id][1]) ** 2), 0);
-    const normalizedError = Math.sqrt(squared / fitting.reduce((sum, { id }) => sum + landmarkWeights[id], 0)) / eyeDistance;
+    const error = (points) => {
+        const squared = fitting.reduce((sum, { id }) => sum + landmarkWeights[id] * ((points[id][0] - observed[id][0]) ** 2 + (points[id][1] - observed[id][1]) ** 2), 0);
+        return Math.sqrt(squared / fitting.reduce((sum, { id }) => sum + landmarkWeights[id], 0)) / eyeDistance;
+    };
+    const coarseNormalizedError = error(facePositions(template, params, undefined, expression).map((point) => project(point, camera)));
+    const identity = fitFaceIdentity(template, analysis, params, expression, camera, landmarkWeights);
+    const projected = facePositions(template, params, identity, expression).map((point) => project(point, camera));
+    const normalizedError = error(projected);
+    // The loft must not apply the same contour correction a second time.
+    const measurements = { ...inferred.measurements, ...measureFaceProportions(analysis, template, params, identity) };
     const warnings = [];
     if (visibleEyes < 0.45)
         warnings.push('Vùng mắt bị che hoặc được đánh dấu có kính: giữ hình mắt mẫu, có thể chỉnh độ mở/nghiêng mắt.');
@@ -294,7 +311,11 @@ export function fitHead(template, anchors, analysis, options = { occludedEyes: f
         warnings.push('Ảnh nghiêng nhiều: vùng khuất dùng hình dạng mẫu. Nên thử ảnh gần chính diện.');
     if (expression.jawOpen > 0.25)
         warnings.push('Miệng mở: đầu xuất về trạng thái trung tính; texture môi có thể còn biểu cảm.');
+    if (expression.smile > 0.35)
+        warnings.push('Ảnh đang cười: đã giảm hiệu chỉnh vùng miệng; hình môi và texture trung tính vẫn chỉ là ước lượng.');
     if (normalizedError > 0.08)
         warnings.push('Sai số khớp còn cao. Thử crop sát mặt, ảnh thẳng hoặc chỉnh các thanh hình học.');
-    return { params, measurements: inferred.measurements, expression, camera, projected, normalizedError, iterations, landmarkWeights, warnings };
+    if (identity.depthConfidence < 0.25)
+        warnings.push('Chiều sâu landmark thiếu tin cậy: hình mũi/má dựa nhiều vào mẫu.');
+    return { params, identity, measurements, expression, camera, projected, normalizedError, coarseNormalizedError, iterations, landmarkWeights, warnings };
 }

@@ -9,6 +9,8 @@ export interface HeadSurface {
     skinFade: number[];
     faceTriangleCount: number;
     photoPoints?: Point2[];
+    /** Retention of existing samples; new edges keep Loop curvature. */
+    detailWeights?: number[];
 }
 export interface SubdividedHeadFields {
     surface: HeadSurface;
