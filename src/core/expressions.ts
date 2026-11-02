@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { clamp } from './shape';
-import { lowerLipRim, upperLipRim } from './mouth';
-import { outerLip } from './visibility';
-import type { ExpressionRigAsset } from './expression-rig';
-import type { Point3 } from './types';
+import { clamp } from './shape.js';
+import { lowerLipRim, upperLipRim } from './mouth.js';
+import { outerLip } from './visibility.js';
+import type { ExpressionRigAsset } from './expression-rig.js';
+import type { Point3 } from './types.js';
 
 export const expressionSet = 'faceverse-mobile-v1';
 export const expressionControls = [

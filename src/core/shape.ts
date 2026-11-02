@@ -1,4 +1,4 @@
-import type { CameraFit, HeadTemplate, Point2, Point3, ShapeParams, Style } from './types';
+import type { CameraFit, HeadTemplate, Point2, Point3, ShapeParams, Style } from './types.js';
 
 export const shapeControls = [
   ['faceWidth', 'Độ rộng mặt'], ['faceLength', 'Chiều dài mặt'],

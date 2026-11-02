@@ -3,7 +3,10 @@
 ## Luồng xử lý
 
 Core và hai worker ở `src/`, asset ở `assets/` tại root; web demo ở `demo/` và app MoodLab
-cùng import `@twa/portrait-head`. Luồng dưới mô tả demo: canvas crop thủ công được
+cùng import entry JavaScript/typings đã chuẩn bị trong `runtime/` của SDK. SDK tự
+quản lý asset, worker và generate/restore; consumer không cấu hình plugin hoặc
+đường dẫn public. Payload model nén được giải nén/kiểm tra pin rồi đưa qua Blob URL.
+Luồng dưới mô tả source của demo: canvas crop thủ công được
 giữ nguyên. Với app, `File` được tự căn/xoay và crop trong analysis worker trước
 khi đi qua cùng thuật toán fit/texture/mesh. App tự ghép body và quản lý dữ liệu
 đã lưu; các giới hạn RAM/tải file dưới đây nói về demo.

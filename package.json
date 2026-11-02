@@ -1,30 +1,38 @@
 {
   "name": "@twa/portrait-head",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "devDependencies": {
     "@types/three": "0.186.0",
-    "three": "0.186.1"
+    "three": "0.186.1",
+    "typescript": "5.9.3",
+    "esbuild": "0.28.2"
   },
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "import": "./src/index.ts"
-    },
-    "./vite": {
-      "types": "./integrations/vite.d.mts",
-      "import": "./integrations/vite.mjs"
+      "types": "./runtime/index.d.ts",
+      "import": "./runtime/index.js",
+      "default": "./runtime/index.js"
     }
   },
   "peerDependencies": {
     "three": "0.186.1"
   },
   "files": [
-    "src/",
-    "assets/",
+    "runtime/",
+    "portrait-head.config.js",
+    "portrait-head.config.d.ts",
+    "assets/licenses/",
     "asset-manifest.json",
-    "integrations/",
-    "docs/LIBRARY.md"
-  ]
+    "docs/LIBRARY.md",
+    "docs/THIRD_PARTY_ASSETS.md"
+  ],
+  "main": "./runtime/index.js",
+  "module": "./runtime/index.js",
+  "types": "./runtime/index.d.ts",
+  "scripts": {
+    "prepare:runtime": "node tooling/prepare-runtime.mjs"
+  },
+  "sideEffects": false
 }

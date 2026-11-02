@@ -12,8 +12,6 @@ import { HeadViewer } from './viewer';
 import { download } from './download';
 import { headErrorMessage, headProgressLabel } from './head-ui';
 
-const assets = { assetBaseUrl: new URL(`${import.meta.env.BASE_URL}assets/portrait-head/`, location.origin).href };
-
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header class="header">
     <a class="brand" href="/" aria-label="Portrait Head Lab"><span class="brand-mark">p<span>h</span></span><span>Portrait <strong>Head Lab</strong><small>ẢNH CHÂN DUNG → ĐẦU 3D</small></span></a>
@@ -61,7 +59,7 @@ const element = <T extends HTMLElement = HTMLElement>(id: string) => document.ge
 const input = (id: string) => element<HTMLInputElement>(id);
 const button = (id: string) => element<HTMLButtonElement>(id);
 const cropper = new PortraitCropper(element<HTMLCanvasElement>('crop'));
-const pipeline = new HeadPipeline(assets);
+const pipeline = new HeadPipeline();
 let viewer: HeadViewer | undefined;
 let template: HeadTemplate | undefined;
 let ears: EarTemplate | undefined;
@@ -118,7 +116,7 @@ function refreshMesh(fit = !viewer?.getHead(), previewOnly = false) {
 }
 function ensureGenerationAssets() {
   if (ears && expressionRig) return Promise.resolve();
-  generationAssets ??= Promise.all([loadEarTemplate(assets), loadExpressionRig(assets)]).then(([earTemplate, rig]) => {
+  generationAssets ??= Promise.all([loadEarTemplate(), loadExpressionRig()]).then(([earTemplate, rig]) => {
     ears = earTemplate;
     expressionRig = rig;
   }).catch((error) => {
@@ -369,7 +367,7 @@ async function initialize() {
   try {
     if (!window.Worker || !window.WebAssembly || !window.createImageBitmap || !window.OffscreenCanvas) throw new Error('Bản thử cần Worker, WebAssembly và OffscreenCanvas. Hãy dùng trình duyệt mới.');
     viewer = new HeadViewer(element('viewer'));
-    const loaded = await loadTemplate(assets);
+    const loaded = await loadTemplate();
     if (token !== lifecycle) return;
     template = loaded.template;
     // Show a lightweight head immediately; expensive ears and six expression

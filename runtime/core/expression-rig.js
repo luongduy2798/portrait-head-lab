@@ -1,0 +1,62 @@
+import { expressionControls, expressionSet } from './expressions.js';
+import { headAssetURL, waitForHeadAssets } from '../assets.js';
+import { HeadError } from '../errors.js';
+const sourceCommit = '19c67cc4d7234b1ea7d55a185a2cb55fd49bb877';
+const sourceBasis = '9b23ad5d087f0d109e098f903c33a5e33da9807677f09f245829a77932c2693a';
+const sourceExpressions = 'bd489640bdc41a2fefc5ac432c1a515eb8af7347f422b208c129ce4611d8ca31';
+const record = (value) => typeof value === 'object' && value !== null;
+const points = (value, count) => Array.isArray(value) && value.length === count &&
+    value.every((point) => Array.isArray(point) && point.length === 3 && point.every((n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) < 10000));
+const deltas = (value, count) => record(value) && expressionControls.every(([name]) => points(value[name], count));
+const pendingAssets = new Map();
+export async function loadExpressionRig(options = {}, signal) {
+    signal?.throwIfAborted();
+    const [manifestURL, base] = await waitForHeadAssets(Promise.all([
+        headAssetURL(options, 'faceverse/expression-rig-manifest.json'),
+        headAssetURL(options, 'faceverse/expression-rig.json'),
+    ]), signal);
+    let pending = pendingAssets.get(base);
+    pending ??= (async () => {
+        const manifestResponse = await fetch(manifestURL, { cache: 'no-cache' });
+        if (!manifestResponse.ok)
+            throw new Error('Không tải được manifest biểu cảm. Kiểm tra assetBaseUrl và file trên host.');
+        const manifest = await manifestResponse.json();
+        if (!record(manifest) || manifest.schemaVersion !== 1 || manifest.expressionSet !== expressionSet || manifest.file !== 'expression-rig.json' ||
+            typeof manifest.bytes !== 'number' || !Number.isSafeInteger(manifest.bytes) || manifest.bytes <= 0 || manifest.bytes > 8_000_000 ||
+            typeof manifest.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(manifest.sha256) ||
+            !record(manifest.source) || manifest.source.sourceCommit !== sourceCommit || !record(manifest.source.files)) {
+            throw new Error('Manifest rig biểu cảm không khớp phiên bản đã pin.');
+        }
+        const files = manifest.source.files;
+        if (!record(files['basis.bin']) || files['basis.bin'].sha256 !== sourceBasis ||
+            !record(files['expression.bin']) || files['expression.bin'].sha256 !== sourceExpressions)
+            throw new Error('Rig biểu cảm không dùng basis FaceVerse đã pin.');
+        const response = await fetch(base, { cache: 'force-cache' });
+        if (!response.ok)
+            throw new Error('Không tải được asset biểu cảm. Kiểm tra assetBaseUrl và file trên host.');
+        const bytes = await response.arrayBuffer();
+        const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (value) => value.toString(16).padStart(2, '0')).join('');
+        if (bytes.byteLength !== manifest.bytes || digest !== manifest.sha256)
+            throw new Error('Checksum rig biểu cảm không khớp bản đã pin. Kiểm tra file trên host.');
+        const asset = JSON.parse(new TextDecoder().decode(bytes));
+        if (!record(asset) || asset.schemaVersion !== 1 || asset.expressionSet !== expressionSet || asset.units !== 'centimetres' ||
+            !points(asset.landmarks, 468) || !deltas(asset.deltas, 468) || !Array.isArray(asset.oral) || asset.oral.length !== 3)
+            throw new Error('Dữ liệu rig biểu cảm không hợp lệ.');
+        for (const [index, name] of ['tongue', 'lowerTeeth', 'upperTeeth'].entries()) {
+            const surface = asset.oral[index];
+            if (!record(surface))
+                throw new Error(`Thiếu hình học ${name}.`);
+            const count = Array.isArray(surface.positions) ? surface.positions.length : 0;
+            if (surface.name !== name || count < 100 || count > 5000 ||
+                !points(surface.positions, count) || !points(surface.colors, count) ||
+                !surface.colors.every((color) => color.every((value) => value >= 0 && value <= 1)) || !deltas(surface.deltas, count) ||
+                !Array.isArray(surface.triangles) || surface.triangles.length === 0 || surface.triangles.length > 20000 ||
+                !surface.triangles.every((triangle) => Array.isArray(triangle) && triangle.length === 3 && triangle.every((id) => Number.isInteger(id) && id >= 0 && id < count))) {
+                throw new Error(`Hình học ${name} trong rig biểu cảm không hợp lệ.`);
+            }
+        }
+        return asset;
+    })().catch(() => { pendingAssets.delete(base); throw new HeadError('assets'); });
+    pendingAssets.set(base, pending);
+    return waitForHeadAssets(pending, signal);
+}

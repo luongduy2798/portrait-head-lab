@@ -1,5 +1,5 @@
-import { clamp } from './shape';
-import type { Analysis, GenerationOptions } from './types';
+import { clamp } from './shape.js';
+import type { Analysis, GenerationOptions } from './types.js';
 
 export const eyeContours = [
   { upper: [33, 246, 161, 160, 159, 158, 157, 173, 133], lower: [33, 7, 163, 144, 145, 153, 154, 155, 133] },

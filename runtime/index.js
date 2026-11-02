@@ -1,0 +1,11 @@
+export * from './errors.js';
+export * from './core/types.js';
+export { PortraitHeadPipeline, restorePortraitHead } from './portrait-head.js';
+export { isPortraitHeadData, portraitHeadData } from './data.js';
+export { HeadPipeline, loadTemplate } from './core/pipeline.js';
+export { createHead, computeSmoothNormals, disposeObject, updateFlatAppearance } from './core/mesh.js';
+export { loadEarTemplate } from './core/ears.js';
+export { loadExpressionRig } from './core/expression-rig.js';
+export { applyExpression, controlsForObject, expressionControls, expressionSet, expressionIntensityMultiplier, legacyExpressionControls, readExpression, supportsExpressions, updateExpressionBounds, } from './core/expressions.js';
+export { manualKeys, shapeControls } from './core/shape.js';
+export { exportHead, inspectGLB } from './core/exporter.js';

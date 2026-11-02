@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { clamp } from './shape';
-import { browContours, eyeContours, outerLip } from './visibility';
-import type { HeadPart, HeadTemplate, PaletteOverrides, Point2, Point3 } from './types';
+import { clamp } from './shape.js';
+import { browContours, eyeContours, outerLip } from './visibility.js';
+import type { HeadPart, HeadTemplate, PaletteOverrides, Point2, Point3 } from './types.js';
 
 export interface FacePalette {
   skin: THREE.Color; lips: THREE.Color; brows: THREE.Color;

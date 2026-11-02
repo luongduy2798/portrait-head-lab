@@ -1,5 +1,5 @@
-import { clamp, deformPoint } from './shape';
-import type { Point3, ShapeParams, SkinSample } from './types';
+import { clamp, deformPoint } from './shape.js';
+import type { Point3, ShapeParams, SkinSample } from './types.js';
 
 export type SkinColorField = (point: Point3) => Point3;
 

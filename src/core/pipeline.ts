@@ -1,6 +1,8 @@
-import { headAssetURL, headWorkerAssets, waitForHeadAssets, type HeadAssetOptions } from '../assets';
-import { HeadError, isHeadErrorCode } from '../errors';
-import type { Analysis, Anchor, GenerationOptions, HeadResult, HeadTemplate } from './types';
+import { headAssetURL, headWorkerAssets, waitForHeadAssets, type HeadAssetOptions } from '../assets.js';
+import { HeadError, isHeadErrorCode } from '../errors.js';
+import type { Analysis, Anchor, GenerationOptions, HeadResult, HeadTemplate } from './types.js';
+import analysisWorkerSource from '../../runtime/workers/analysis-source.js';
+import generationWorkerSource from '../../runtime/workers/generation-source.js';
 
 export interface Progress { phase: 'loadingModel' | 'detecting' | 'segmenting' | 'fitting' | 'texturing'; progress: number }
 export interface PipelineGenerationOptions extends GenerationOptions {
@@ -26,14 +28,14 @@ async function loadJSON(path: string) {
   }
 }
 
-export function loadTemplate(options: HeadAssetOptions, signal?: AbortSignal): Promise<TemplateAssets> {
+export async function loadTemplate(options: HeadAssetOptions = {}, signal?: AbortSignal): Promise<TemplateAssets> {
   signal?.throwIfAborted();
-  const templateUrl = headAssetURL(options, 'head-template.json');
+  const templateUrl = await waitForHeadAssets(headAssetURL(options, 'head-template.json'), signal);
   let pending = cachedAssets.get(templateUrl);
   if (!pending) {
     pending = (async () => {
       const [template, map] = await Promise.all([
-        loadJSON(templateUrl), loadJSON(headAssetURL(options, 'landmark-anchors.json')),
+        loadJSON(templateUrl), headAssetURL(options, 'landmark-anchors.json').then(loadJSON),
       ]);
       if (!template || typeof template !== 'object' || !map || typeof map !== 'object') throw new HeadError('assets');
       const count = Array.isArray(template.positions) ? template.positions.length : 0;
@@ -64,9 +66,10 @@ export class HeadPipeline {
   private activeController?: AbortController;
   private sequence = 0;
   private busy = false;
+  private readonly workerURLs = new Set<string>();
   private readonly assets: HeadAssetOptions;
 
-  constructor(options: HeadAssetOptions) { this.assets = { ...options }; }
+  constructor(options: HeadAssetOptions = {}) { this.assets = { ...options }; }
 
   async generate(source: File | HTMLCanvasElement, onProgress: (progress: Progress) => void, options: PipelineGenerationOptions = { occludedEyes: false }): Promise<{ result: HeadResult; analysis: Analysis; template: HeadTemplate }> {
     options.signal?.throwIfAborted();
@@ -99,15 +102,15 @@ export class HeadPipeline {
         bitmap.close(); bitmap = resized;
         check();
       }
-      // Keep this worker classic for MediaPipe's importScripts. The host bundles it
-      // with the app, so models may use a CDN without a cross-origin Worker URL.
-      this.analyzer ??= new Worker(new URL('../workers/analysis.worker.js', import.meta.url));
+      const workerAssets = await waitForHeadAssets(headWorkerAssets(this.assets), controller.signal);
+      check();
+      this.analyzer ??= this.createWorker(analysisWorkerSource);
       const photo = await this.request<AnalyzedPhoto>(this.analyzer, {
-        bitmap, assets: headWorkerAssets(this.assets), crop: options.crop ?? (isFile ? 'auto' : 'none'),
+        bitmap, assets: workerAssets, crop: options.crop ?? (isFile ? 'auto' : 'none'),
       }, [bitmap], onProgress);
       bitmap = undefined;
       check();
-      this.generator ??= new Worker(new URL('../workers/generate.worker.ts', import.meta.url), { type: 'module' });
+      this.generator ??= this.createWorker(generationWorkerSource);
       const result = await this.request<HeadResult>(this.generator, {
         template, anchors, ...photo, options: { occludedEyes: options.occludedEyes },
       }, [photo.pixels.buffer], onProgress);
@@ -121,6 +124,18 @@ export class HeadPipeline {
       if (token === this.sequence) {
         this.busy = false; this.activeReject = undefined; this.activeController = undefined;
       }
+    }
+  }
+
+  private createWorker(source: string): Worker {
+    const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+    try {
+      const worker = new Worker(url);
+      this.workerURLs.add(url);
+      return worker;
+    } catch {
+      URL.revokeObjectURL(url);
+      throw new HeadError('assets');
     }
   }
 
@@ -149,6 +164,7 @@ export class HeadPipeline {
     this.activeController?.abort(); this.activeController = undefined;
     this.activeReject?.(new DOMException('Aborted', 'AbortError'));
     this.analyzer?.terminate(); this.generator?.terminate();
+    this.workerURLs.forEach((url) => URL.revokeObjectURL(url)); this.workerURLs.clear();
     this.analyzer = undefined; this.generator = undefined; this.busy = false;
   }
   dispose() { this.cancel(); }

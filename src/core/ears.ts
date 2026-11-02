@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { smoothHeadSurface } from './subdivision';
-import type { Point3 } from './types';
-import { headAssetURL, waitForHeadAssets, type HeadAssetOptions } from '../assets';
-import { HeadError } from '../errors';
+import { smoothHeadSurface } from './subdivision.js';
+import type { Point3 } from './types.js';
+import { headAssetURL, waitForHeadAssets, type HeadAssetOptions } from '../assets.js';
+import { HeadError } from '../errors.js';
 
 export interface EarTemplate {
   positions: Point3[];
@@ -16,9 +16,9 @@ export interface EarTemplate {
 const sourceSHA256 = '0de714251964c2db70cdf1286dc5e9f899ce1dce9d78877ba58629de4b32b93f';
 const pendingAssets = new Map<string, Promise<EarTemplate>>();
 
-export function loadEarTemplate(options: HeadAssetOptions, signal?: AbortSignal): Promise<EarTemplate> {
+export async function loadEarTemplate(options: HeadAssetOptions = {}, signal?: AbortSignal): Promise<EarTemplate> {
   signal?.throwIfAborted();
-  const sourcePath = headAssetURL(options, 'faceverse/faceverse-neutral.glb');
+  const sourcePath = await waitForHeadAssets(headAssetURL(options, 'faceverse/faceverse-neutral.glb'), signal);
   let pending = pendingAssets.get(sourcePath);
   pending ??= (async () => {
     const response = await fetch(sourcePath, { cache: 'force-cache' });

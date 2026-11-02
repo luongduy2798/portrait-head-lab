@@ -1,14 +1,14 @@
 import * as THREE from 'three';
-import { clamp, deformPoint, rotate, styledParams } from './shape';
-import type { EarTemplate } from './ears';
-import { expressionControls, expressionIntensityMultiplier, expressionSet, retargetExpressionDeltas, updateExpressionBounds } from './expressions';
-import type { ExpressionRigAsset } from './expression-rig';
-import { addOralCavity } from './oral-cavity';
-import { lowerLipRim, mouthSurfaceTriangles, upperLipRim } from './mouth';
-import { createSkinField, linearToSrgb, srgbToLinear, type SkinColorField } from './skin';
-import { smoothHeadSurface, smoothHeadSurfaceFields, type HeadSurface } from './subdivision';
-import { eyeContours } from './visibility';
-import type { HeadMeasurements, HeadPart, HeadResult, HeadTemplate, Point2, Point3, ShapeParams, Style } from './types';
+import { clamp, deformPoint, rotate, styledParams } from './shape.js';
+import type { EarTemplate } from './ears.js';
+import { expressionControls, expressionIntensityMultiplier, expressionSet, retargetExpressionDeltas, updateExpressionBounds } from './expressions.js';
+import type { ExpressionRigAsset } from './expression-rig.js';
+import { addOralCavity } from './oral-cavity.js';
+import { lowerLipRim, mouthSurfaceTriangles, upperLipRim } from './mouth.js';
+import { createSkinField, linearToSrgb, srgbToLinear, type SkinColorField } from './skin.js';
+import { smoothHeadSurface, smoothHeadSurfaceFields, type HeadSurface } from './subdivision.js';
+import { eyeContours } from './visibility.js';
+import type { HeadMeasurements, HeadPart, HeadResult, HeadTemplate, Point2, Point3, ShapeParams, Style } from './types.js';
 
 const smoothstep = (value: number) => {
   const t = clamp(value, 0, 1);

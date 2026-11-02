@@ -1,110 +1,86 @@
 # @twa/portrait-head
 
-Package private, browser-only, export source TypeScript/ESM. Core nằm ở root,
-không import Vite, Node.js hoặc mã demo. `demo/` là package riêng có dependency,
-lockfile và toolchain riêng, không phải workspace tự cài cùng thư viện.
-Demo và MoodLab dùng một source; không có bước build thư viện, copy core hoặc publish.
+SDK trình duyệt cung cấp JavaScript ESM và typings đã chuẩn bị tại `runtime/`.
+Runtime chỉ dùng peer `three@0.186.1`. App không cần compiler của thư viện, plugin
+Vite, biến môi trường CDN, public asset path hoặc bước chuẩn bị model.
 
-Runtime dùng peer `three@0.186.1`; root chỉ giữ Three.js và type của nó cho phát triển
-core. Vite và TypeScript compiler nằm trong `demo/`. `files` của package chỉ gồm
-core, asset, metadata, tài liệu API và adapter tích hợp tùy chọn; không chứa demo.
+## Cài và dùng
 
-## Kết nối
-
-Trong repo sibling, khai báo dependency:
-
-```json
-"@twa/portrait-head": "file:../portrait-head-lab"
-```
-
-Cài dependencies ở repo thư viện trước (`npm ci --ignore-scripts` tại root), rồi
-`npm install --ignore-scripts --install-links=false --no-audit --no-fund` tại app.
-`install-links=false` giữ symlink tới source. Cài lại sau khi thay đường dẫn/package metadata;
-sửa source không cần cài lại. Cả hai checkout cần tồn tại khi cài/chạy/build app.
-
-Chỉ cài thư viện không cài demo hoặc toolchain của demo. Khi muốn mở demo, cài và
-chạy riêng trong `demo/`: `npm ci --ignore-scripts --install-links=false`, rồi
-`npm run dev`. `build` và `preview` cũng chạy tại thư mục demo.
-
-## Host và bundler
-
-Host cần xử lý source TypeScript/ESM và cú pháp Worker chuẩn
-`new Worker(new URL(..., import.meta.url))`; analysis worker giữ kiểu classic để
-MediaPipe dùng `importScripts`, generation worker dùng module. Host chịu trách nhiệm
-bundle hai worker và phục vụ `assets/` tại `assetBaseUrl`. Core không tự cài hoặc
-gọi Vite; tích hợp với bundler ngoài Vite chưa được kiểm chứng trong thay đổi này.
-
-Với host dùng Vite, có thể chọn entry riêng:
+Với checkout sibling, khai báo `"@twa/portrait-head": "file:../portrait-head-lab"`
+rồi cài dependency như app hiện tại. Hai checkout cần tồn tại khi dùng symlink.
+Bản cài dùng các artifact đã có; không chạy prepare/build tại consumer.
 
 ```ts
-import { portraitHeadAssets } from '@twa/portrait-head/vite';
+import { PortraitHeadPipeline, HeadError } from '@twa/portrait-head';
 
-// Thêm vào plugins của Vite; đường dẫn tương đối với config.base.
-portraitHeadAssets({ basePath: 'assets/portrait-head/' });
-```
-
-Plugin phục vụ bộ asset đã có sẵn trong package, theo allowlist và checksum trong
-`asset-manifest.json`. Cả classic analysis worker và module generation worker được
-Vite của host bundle từ source cùng mã ứng dụng. Adapter ở `integrations/` giữ allowlist filesystem của Vite,
-thêm source của package vào allowlist, dedupe `three` và loại package khỏi prebundle.
-MediaPipe `0.10.35`, Three.js peer `0.186.1`; consumer phải dùng cùng Three.js.
-Adapter dùng Node built-ins, không kéo Vite vào dependency của thư viện. Host sử
-dụng phiên bản Vite của chính host; import core không nạp adapter này.
-
-Mặc định build đính kèm asset đã chuẩn bị; dev phục vụ trực tiếp cùng bộ file.
-Không có lệnh chuẩn bị asset, không cần package MediaPipe trong node_modules để chạy.
-
-Để dùng CDN, upload nội dung `assets/` và giữ nguyên cấu trúc, đặt `assetBaseUrl`
-thành URL thư mục CDN có phiên bản. Dùng `portraitHeadAssets({ emitAssets: false })`
-để bỏ đính kèm bản asset local. Worker vẫn được bundle cùng app, không lấy Worker
-entry từ CDN. CDN cần CORS cho origin ứng dụng, MIME WASM và CSP phù hợp.
-MoodLab nhận URL qua `ML_PORTRAIT_HEAD_ASSET_BASE_URL`; để trống dùng asset local.
-
-## API trình duyệt
-
-```ts
-import {
-  HeadPipeline, loadEarTemplate, loadExpressionRig, createHead, disposeObject,
-} from '@twa/portrait-head';
-
-const assets = {
-  assetBaseUrl: new URL('/assets/portrait-head/', location.origin).href,
-};
-const pipeline = new HeadPipeline(assets);
-const controller = new AbortController();
-const { result, template } = await pipeline.generate(fileOrCanvas, onProgress, {
+const sdk = new PortraitHeadPipeline();
+const head = await sdk.generate(fileOrCanvas, {
   signal: controller.signal,
-  occludedEyes: false,
+  onProgress: ({ phase, progress }) => updateProgress(phase, progress),
 });
-const [ears, rig] = await Promise.all([
-  loadEarTemplate(assets, controller.signal), loadExpressionRig(assets, controller.signal),
-]);
-const head = createHead(template, ears, rig, result, result.fit.params);
-// Khi không còn dùng:
-disposeObject(head);
-pipeline.dispose();
+scene.add(head.root);
+const savedFace = head.data; // Lưu trong kho dữ liệu do app quản lý nếu cần.
+head.dispose();
+const restored = await sdk.restore(savedFace, { signal: controller.signal });
+restored.dispose();
+sdk.dispose();
 ```
 
-- `File` tự căn mặt/xoay và crop 1024 px trong classic analysis worker; decode giới hạn
-  cạnh dài 2048 px. Canvas đã crop giữ nguyên kích thước và không tự crop lại.
-  `crop: 'auto' | 'none'` cho phép chỉ định rõ hành vi.
+- `generate` tự chuẩn bị model/worker, phân tích ảnh, fit, texture và dựng mesh.
+- `File` tự căn/xoay và crop 1024 px; canvas đã crop giữ nguyên. Có thể chỉ định
+  `crop: 'auto' | 'none'`, `occludedEyes` trong options của `generate`.
+- `restore` dựng lại đầu từ `PortraitHeadData`, không đọc ảnh hoặc chạy nhận diện.
+- Kết quả có `root`, `data`, geometry `neutral`, landmark trung tính, `neckIndices`,
+  `skinColor` và `dispose()`. `new PortraitHeadPipeline({ openNeck: true })` dành cho
+  adapter ghép body; mặc định đầu độc lập có đáy cổ kín.
+- `cancel()`/`dispose()` hủy cả phân tích lẫn khôi phục và thu hồi Blob URL worker.
+  Head đã trả về thuộc caller; caller gọi `head.dispose()` khi không dùng.
+- `HeadError.code` gồm lỗi ảnh/mặt/model/generation và `faceUnavailable` cho dữ
+  liệu lưu không hợp lệ. Hủy trả `AbortError`. Consumer tự dịch thông báo UI.
 - `Progress.phase`: `loadingModel`, `detecting`, `segmenting`, `fitting`, `texturing`;
-  `progress` thuộc khoảng 0–1. Consumer tự dịch nhãn.
-- Lỗi pipeline dùng `HeadError` với mã ổn định; hủy dùng `AbortError`.
-  `cancel()`/`dispose()` dừng worker của phiên; phiên khác vẫn tải được model dùng chung.
-- `loadTemplate(assets, signal?)`, `loadEarTemplate`, `loadExpressionRig` cache theo
-  URL và chỉ cache dữ liệu model, không cache ảnh/landmark của người dùng.
-- `createHead` mặc định đóng đáy cổ. Body adapter dùng `openNeck: true` và
-  `onNeutralSurface` trong đối số options cuối; geometry cung cấp `_portraitVertex`
-  để giữ correspondence khi tách UV. Callback cần clone geometry nếu giữ lại, và tự dispose bản clone.
-- Public exports gồm type dữ liệu, điều khiển shape/biểu cảm, `computeSmoothNormals`,
-  `exportHead` và `inspectGLB`. UI, cropper, viewer, download thuộc consumer.
+  `progress` thuộc khoảng 0–1.
 
-Schema lưu face, IndexedDB, body/wardrobe, tối ưu avatar và Save/backend thuộc app.
-Baseline dữ liệu cũ giữ provenance `9b8fb0355f628d56783e361f30ed3022fa70b710`;
-thay cách import không đổi schema hoặc làm mất khả năng khôi phục face đã lưu.
+Schema face v1 và provenance baseline `9b8fb0355f628d56783e361f30ed3022fa70b710`
+được giữ để đọc dữ liệu đã lưu. SDK export `PortraitHeadData`, `isPortraitHeadData`
+và `portraitHeadData`; app không tự định nghĩa lại schema/validator. Kho IndexedDB,
+tài khoản, thumbnail và luồng Save/backend vẫn do app quản lý.
 
-Model, JS/WASM, template, anchors và rig FaceVerse đã chuẩn bị sẵn trong `assets/`.
-Chỉ cài dependencies rồi dùng thư viện; không sinh lại dữ liệu trong triển khai.
-Nguồn, quyền sử dụng và giới hạn: [THIRD_PARTY_ASSETS](THIRD_PARTY_ASSETS.md).
-Chưa chạy kiểm chứng build/typecheck/browser cho lần tách package này.
+## Asset, worker và CDN
+
+Mặc định SDK dùng 19 payload model/runtime đã pin trong package, nạp khi cần,
+giải nén gzip bằng fflate từ Three.js, kiểm tra SHA-256/byte count rồi tạo Blob URL.
+Worker JavaScript đã đóng gói cùng SDK và được tạo bằng Blob. Không yêu cầu host
+transpile TypeScript, bundle Worker entry hay phục vụ một thư mục public riêng.
+Các bundler ngoài Vite chưa được kiểm chứng thực tế; SDK không có Vite dependency.
+
+Cấu hình CDN thuộc **`portrait-head.config.js` ở root thư viện**. Để trống
+`assetBaseUrl` dùng payload đóng gói. Khi có CDN, upload bản raw từ `assets/` của
+repo, giữ cấu trúc và đặt URL thư mục có phiên bản vào file cấu hình thư viện.
+Không cần biến `ML_PORTRAIT_HEAD_ASSET_BASE_URL` hoặc thay cấu hình trong app.
+`assetBaseUrl` trong constructor chỉ là override nâng cao, không bắt buộc.
+
+CSP của host cần cho phép `worker-src blob:`, `script-src blob:` và WebAssembly,
+`connect-src blob:`; khi dùng CDN thêm origin CDN vào `connect-src` và bật CORS trên
+CDN. Ảnh/landmark chỉ qua bộ nhớ và worker trên thiết bị, không gửi tới CDN.
+Cache asset dùng chung chỉ giữ model đã pin, không giữ ảnh hay dữ liệu face.
+
+Nguồn và giấy phép: [THIRD_PARTY_ASSETS](THIRD_PARTY_ASSETS.md). Việc đóng gói không
+đổi trạng thái `licenseVerified: false` của dữ liệu FaceVerse.
+
+## API nâng cao và demo
+
+Demo ở `demo/` có package/toolchain riêng và dùng các public API cấp thấp
+`HeadPipeline`, `loadTemplate`, `loadEarTemplate`, `loadExpressionRig`, `createHead`,
+shape/expression controls, `exportHead`, `inspectGLB` để giữ công cụ chẩn đoán.
+Các loader và pipeline đều có cấu hình mặc định của SDK. Runtime app thông thường
+chỉ cần `PortraitHeadPipeline` và dữ liệu kết quả.
+
+## Cập nhật artifact khi phát triển thư viện
+
+Sau khi sửa source hoặc pin asset, maintainer chạy `npm run prepare:runtime` tại
+root. Công cụ dev-only dùng TypeScript/esbuild để chuẩn bị JS/declarations/worker
+và nén asset hiện có; không tải model, inference, kiểm thử, deployment hoặc build
+app/demo. Artifact được giữ sẵn trong repo để consumer không chạy công cụ này.
+Source tooling và demo không nằm trong gói phân phối. Vite chỉ nằm trong demo.
+Chưa chạy test, build app/demo, lint, typecheck dự án hoặc browser validation cho
+thay đổi SDK này. Việc tạo artifact không xác nhận khả năng chạy hoặc hiệu năng.

@@ -1,5 +1,5 @@
-/* Classic worker: MediaPipe's WASM loader uses importScripts. The host bundles
- * this worker; pinned assets use the configured host. Photos stay on-device. */
+/* Prepared classic worker; all runtime files are verified Blob URLs supplied
+ * by the SDK. MediaPipe keeps its importScripts path. Photos stay on-device. */
 let detector, segmenter;
 const emit = (phase, progress) => self.postMessage({ type: 'progress', phase, progress });
 const fail = (code) => { const error = new Error(code); error.headCode = code; throw error; };
@@ -48,10 +48,8 @@ self.onmessage = async ({ data }) => {
   try {
     const timings = {}, cold = performance.now();
     emit('loadingModel', 0.04);
-    if (!self.vision) importScripts(new URL('vision_bundle.js', data.assets.runtime).href);
-    // FilesetResolver appends its own slash. Keep importScripts' directory URL,
-    // but strip its trailing slash before resolving the WASM loader paths.
-    const files = await vision.FilesetResolver.forVisionTasks(data.assets.runtime.replace(/\/+$/, ''));
+    if (!self.vision) importScripts(data.assets.bundle);
+    const files = data.assets.files;
     if (!detector) detector = await vision.FaceLandmarker.createFromOptions(files, {
       baseOptions: { modelAssetPath: data.assets.landmarker, delegate: 'CPU' },
       runningMode: 'IMAGE', numFaces: 2, outputFaceBlendshapes: true,

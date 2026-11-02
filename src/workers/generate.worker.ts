@@ -1,8 +1,8 @@
 /// <reference lib="webworker" />
-import { fitHead } from '../core/fitter';
-import { buildTexture } from '../core/texture';
-import { sampleSkinColor } from '../core/appearance';
-import type { Analysis, Anchor, GenerationOptions, HeadTemplate, Point3, SkinSample } from '../core/types';
+import { fitHead } from '../core/fitter.js';
+import { buildTexture } from '../core/texture.js';
+import { sampleSkinColor } from '../core/appearance.js';
+import type { Analysis, Anchor, GenerationOptions, HeadTemplate, Point3, SkinSample } from '../core/types.js';
 
 self.onmessage = ({ data }: MessageEvent<{ template: HeadTemplate; anchors: Anchor[]; analysis: Analysis; pixels: Uint8ClampedArray; width: number; height: number; options: GenerationOptions }>) => {
   try {

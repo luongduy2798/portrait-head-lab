@@ -1,7 +1,7 @@
-import { expressionControls, expressionSet, type ExpressionName } from './expressions';
-import type { Point3 } from './types';
-import { headAssetURL, waitForHeadAssets, type HeadAssetOptions } from '../assets';
-import { HeadError } from '../errors';
+import { expressionControls, expressionSet, type ExpressionName } from './expressions.js';
+import type { Point3 } from './types.js';
+import { headAssetURL, waitForHeadAssets, type HeadAssetOptions } from '../assets.js';
+import { HeadError } from '../errors.js';
 
 export interface OralRigSurface {
   name: 'tongue' | 'lowerTeeth' | 'upperTeeth';
@@ -27,12 +27,15 @@ const points = (value: unknown, count: number): value is Point3[] => Array.isArr
 const deltas = (value: unknown, count: number) => record(value) && expressionControls.every(([name]) => points(value[name], count));
 const pendingAssets = new Map<string, Promise<ExpressionRigAsset>>();
 
-export function loadExpressionRig(options: HeadAssetOptions, signal?: AbortSignal): Promise<ExpressionRigAsset> {
+export async function loadExpressionRig(options: HeadAssetOptions = {}, signal?: AbortSignal): Promise<ExpressionRigAsset> {
   signal?.throwIfAborted();
-  const base = headAssetURL(options, 'faceverse/');
+  const [manifestURL, base] = await waitForHeadAssets(Promise.all([
+    headAssetURL(options, 'faceverse/expression-rig-manifest.json'),
+    headAssetURL(options, 'faceverse/expression-rig.json'),
+  ]), signal);
   let pending = pendingAssets.get(base);
   pending ??= (async () => {
-    const manifestResponse = await fetch(`${base}expression-rig-manifest.json`, { cache: 'no-cache' });
+    const manifestResponse = await fetch(manifestURL, { cache: 'no-cache' });
     if (!manifestResponse.ok) throw new Error('Không tải được manifest biểu cảm. Kiểm tra assetBaseUrl và file trên host.');
     const manifest: unknown = await manifestResponse.json();
     if (!record(manifest) || manifest.schemaVersion !== 1 || manifest.expressionSet !== expressionSet || manifest.file !== 'expression-rig.json' ||
@@ -44,7 +47,7 @@ export function loadExpressionRig(options: HeadAssetOptions, signal?: AbortSigna
     const files = manifest.source.files;
     if (!record(files['basis.bin']) || files['basis.bin'].sha256 !== sourceBasis ||
       !record(files['expression.bin']) || files['expression.bin'].sha256 !== sourceExpressions) throw new Error('Rig biểu cảm không dùng basis FaceVerse đã pin.');
-    const response = await fetch(`${base}expression-rig.json?v=${manifest.sha256}`, { cache: 'force-cache' });
+    const response = await fetch(base, { cache: 'force-cache' });
     if (!response.ok) throw new Error('Không tải được asset biểu cảm. Kiểm tra assetBaseUrl và file trên host.');
     const bytes = await response.arrayBuffer();
     const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (value) => value.toString(16).padStart(2, '0')).join('');

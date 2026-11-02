@@ -1,0 +1,13 @@
+export type { HeadAssetOptions } from './assets.js';
+export * from './errors.js';
+export * from './core/types.js';
+export { PortraitHeadPipeline, restorePortraitHead, type PortraitHead, type PortraitHeadOptions, type PortraitHeadGenerateOptions, type PortraitHeadRestoreOptions } from './portrait-head.js';
+export { isPortraitHeadData, portraitHeadData, type PortraitHeadData } from './data.js';
+export { HeadPipeline, loadTemplate, type Progress, type PipelineGenerationOptions } from './core/pipeline.js';
+export { createHead, computeSmoothNormals, disposeObject, updateFlatAppearance, type HeadBuildOptions } from './core/mesh.js';
+export { loadEarTemplate, type EarTemplate } from './core/ears.js';
+export { loadExpressionRig, type ExpressionRigAsset, type OralRigSurface } from './core/expression-rig.js';
+export { applyExpression, controlsForObject, expressionControls, expressionSet, expressionIntensityMultiplier, legacyExpressionControls, readExpression, supportsExpressions, updateExpressionBounds, type ExpressionName, type ExpressionSelection, } from './core/expressions.js';
+export { manualKeys, shapeControls } from './core/shape.js';
+export { exportHead, inspectGLB } from './core/exporter.js';
+export type { HeadSurface } from './core/subdivision.js';

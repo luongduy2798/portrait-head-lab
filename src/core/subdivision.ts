@@ -1,4 +1,4 @@
-import type { HeadPart, Point2, Point3 } from './types';
+import type { HeadPart, Point2, Point3 } from './types.js';
 
 export interface HeadSurface {
   mouthRim?: number[];

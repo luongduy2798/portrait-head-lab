@@ -1,10 +1,10 @@
-import { clamp, deformPoint, rotate } from './shape';
-import { createSkinField, linearToSrgb, srgbToLinear } from './skin';
-import { smoothHeadSurface } from './subdivision';
-import { mouthSurfaceTriangles } from './mouth';
-import { sampleSkinColor } from './appearance';
-import { browContours, eyeContours, outerLip } from './visibility';
-import type { Analysis, FitResult, HeadTemplate, Point2, Point3, SkinSample } from './types';
+import { clamp, deformPoint, rotate } from './shape.js';
+import { createSkinField, linearToSrgb, srgbToLinear } from './skin.js';
+import { smoothHeadSurface } from './subdivision.js';
+import { mouthSurfaceTriangles } from './mouth.js';
+import { sampleSkinColor } from './appearance.js';
+import { browContours, eyeContours, outerLip } from './visibility.js';
+import type { Analysis, FitResult, HeadTemplate, Point2, Point3, SkinSample } from './types.js';
 
 type RasterPoint = [number, number];
 function raster(points: RasterPoint[], width: number, height: number, visit: (x: number, y: number, a: number, b: number, c: number) => void) {

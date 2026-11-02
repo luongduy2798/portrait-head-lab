@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { disposeObject } from './mesh';
-import { expressionControls, updateExpressionBounds } from './expressions';
+import { disposeObject } from './mesh.js';
+import { expressionControls, updateExpressionBounds } from './expressions.js';
 
 export async function exportHead(object: THREE.Object3D) {
   // Export identity/style geometry, expression targets and the active weights.

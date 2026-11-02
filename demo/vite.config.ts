@@ -1,9 +1,7 @@
 import { defineConfig } from 'vite';
-import { portraitHeadAssets } from '@twa/portrait-head/vite';
 
 export default defineConfig({
-  plugins: [portraitHeadAssets()],
+  resolve: { dedupe: ['three'] },
   server: { port: 5187, strictPort: true },
-  worker: { format: 'es' },
   build: { target: 'es2022' },
 });

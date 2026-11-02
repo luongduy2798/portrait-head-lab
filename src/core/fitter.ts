@@ -1,6 +1,6 @@
-import { clamp, deformPoint, project, shapeControls } from './shape';
-import { eyeVisibility, landmarkVisibility, maskAt } from './visibility';
-import type { Analysis, Anchor, CameraFit, FitResult, GenerationOptions, HeadMeasurements, HeadTemplate, Point3, ShapeParams } from './types';
+import { clamp, deformPoint, project, shapeControls } from './shape.js';
+import { eyeVisibility, landmarkVisibility, maskAt } from './visibility.js';
+import type { Analysis, Anchor, CameraFit, FitResult, GenerationOptions, HeadMeasurements, HeadTemplate, Point3, ShapeParams } from './types.js';
 
 const fittingLandmarks = [10, 21, 54, 67, 103, 109, 127, 162, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323, 454, 356, 389, 251, 284, 332, 297, 338, 33, 133, 159, 145, 263, 362, 386, 374, 70, 63, 105, 66, 107, 336, 296, 334, 293, 300, 1, 2, 4, 5, 6, 98, 327, 168, 195, 61, 291, 0, 17, 13, 14, 78, 308, 50, 280, 101, 330];
 const stableLandmarks = new Set([33, 133, 263, 362, 1, 2, 4, 5, 6, 98, 327, 168, 195]);

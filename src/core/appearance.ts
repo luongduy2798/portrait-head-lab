@@ -1,6 +1,6 @@
-import { clamp } from './shape';
-import { maskAt } from './visibility';
-import type { Analysis, Point3 } from './types';
+import { clamp } from './shape.js';
+import { maskAt } from './visibility.js';
+import type { Analysis, Point3 } from './types.js';
 
 export const skinColorHex = (color: Point3) => `#${color.map((channel) => Math.round(clamp(channel, 0, 255)).toString(16).padStart(2, '0')).join('')}`;
 const luma = ([r, g, b]: Point3) => r * 0.2126 + g * 0.7152 + b * 0.0722;

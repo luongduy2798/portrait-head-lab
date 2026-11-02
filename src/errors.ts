@@ -1,6 +1,6 @@
 const headErrorCodes = [
   'invalidImage', 'noFace', 'multipleFaces', 'smallFace', 'frontalFace',
-  'landmarks', 'assets', 'generation',
+  'landmarks', 'assets', 'generation', 'faceUnavailable',
 ] as const;
 
 export type HeadErrorCode = (typeof headErrorCodes)[number];

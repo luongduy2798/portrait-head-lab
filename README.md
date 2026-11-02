@@ -2,22 +2,33 @@
 
 Thư viện **một ảnh → đầu trọc 3D → GLB**, chạy trong trình duyệt, kèm web demo xem 360°. Demo và repo `twa-moodlab-mobile` dùng chung source qua package local `@twa/portrait-head`; không copy core hoặc asset sang app. Không dùng server inference hoặc API trả phí. Tai tái sử dụng mesh trung tính FaceVerse đã có sẵn local; không chạy FaceVerse inference. Bề mặt mặt canonical giữ correspondence landmark/UV; profile sọ/cổ được cá nhân hóa từ mask tóc, da mặt/da cơ thể và các tham số khớp landmark (chiều dài/độ cao chỏm sọ, độ rộng hộp sọ/trán/thái dương và phần cổ nhìn thấy), rồi sinh bằng mesh thủ tục. Chiều sâu sọ phía sau vẫn là prior hình học vì một ảnh chính diện không đủ thông tin để khôi phục chính xác phần khuất; đây không phải scan 3D thật.
 
-## Cấu trúc và dùng chung
+## Dùng thư viện
 
-- `src/`, `assets/`: core, hai worker, API TypeScript và một bộ asset chung ở root.
-- `demo/`: package riêng cho web demo, có `package.json`, lockfile, Vite, TypeScript compiler và các lệnh chạy/build riêng; import thư viện qua `file:..`.
-- `integrations/`: adapter host tùy chọn. Entry `@twa/portrait-head/vite` chỉ dùng khi ứng dụng chọn Vite; core không import adapter này.
+Package `@twa/portrait-head` cung cấp sẵn JavaScript ESM, typings, worker và asset runtime. App chỉ cài rồi gọi SDK; không khai báo biến `ML_`, thêm plugin Vite, copy asset hoặc compile source TypeScript của thư viện.
 
-API và tích hợp host: [hướng dẫn thư viện](docs/LIBRARY.md).
-App dùng dependency `file:../portrait-head-lab`; hai repo cần đặt cạnh nhau và cài dependencies ở cả hai repo. Từ repo app chạy `npm install --ignore-scripts --install-links=false --no-audit --no-fund` một lần để tạo liên kết, rồi dùng lệnh dev hiện có. Sửa core trong package để demo và app cùng nhận thay đổi; tải lại trang để thay các worker đang chạy.
+```ts
+import { PortraitHeadPipeline } from '@twa/portrait-head';
 
-Package root chỉ khai báo Three.js cần cho core và bộ type phục vụ phát triển thư viện. Không có Vite, TypeScript compiler, workspace hoặc lệnh chạy demo ở root. Demo chỉ được cài khi cài riêng trong `demo/`; danh sách `files` của thư viện loại demo khỏi gói phân phối. Core export source TypeScript/ESM và dùng API trình duyệt; host tự chọn compiler/bundler.
+const sdk = new PortraitHeadPipeline();
+const head = await sdk.generate(file, { signal, onProgress });
+scene.add(head.root);
+// App có thể lưu head.data rồi gọi sdk.restore(data) để mở lại.
+// Khi không còn dùng: head.dispose(); sdk.dispose();
+```
 
-Toàn bộ asset runtime đã có sẵn trong `assets/`; không có bước tải model, sinh template hoặc trích biểu cảm. Host phục vụ bộ file này hoặc cấu hình CDN. Adapter Vite tùy chọn phục vụ asset khi dev và mặc định đính kèm chúng khi build.
+- `src/`: source thuật toán, schema face và API SDK.
+- `runtime/`: JS, typings, hai worker và 19 payload asset đã chuẩn bị, được package export trực tiếp.
+- `portrait-head.config.js`: cấu hình asset/CDN thuộc thư viện. Giá trị mặc định rỗng dùng asset đóng gói, không yêu cầu public path của app.
+- `assets/`: bản raw đã pin để quản lý nguồn/giấy phép và upload CDN sau này.
+- `demo/`: package demo độc lập, có Vite/TypeScript, lockfile và lệnh chạy riêng.
+
+Asset được đóng gói thành các payload gzip nạp khi cần, giải nén bằng tiện ích fflate đã có trong Three.js, kiểm tra byte count/SHA-256 rồi tạo Blob URL. Package không chứa thêm một bản raw của toàn bộ model; bản raw vẫn có sẵn trong repo. Worker đã là JavaScript, SDK tự quản lý vòng đời và thu hồi URL worker khi hủy/dispose. Không có inference API hoặc upload ảnh.
+
+API đầy đủ: [hướng dẫn thư viện](docs/LIBRARY.md). App MoodLab dùng `file:../portrait-head-lab`; hai checkout cần đặt cạnh nhau khi dùng liên kết local. App chỉ giữ ghép body, skinning, wardrobe, UI, lưu dữ liệu theo tài khoản và luồng Save hiện có.
 
 ## Chạy demo
 
-Demo dùng Node >= 22.12 và npm. Model, WASM, template và dữ liệu biểu cảm đã có sẵn trong repo.
+Demo dùng Node >= 22.12 và npm. Model và artifact SDK đã có sẵn trong repo.
 
 ```sh
 cd /Users/luongnhatduy/Desktop/portrait-head-lab
@@ -27,17 +38,19 @@ npm ci --ignore-scripts --install-links=false
 npm run dev
 ```
 
-Mở **http://localhost:5187**. Chọn JPEG/PNG/WebP → kéo/zoom/xoay crop → **Dựng đầu 3D** → xem chính diện, ¾, sau → thử Natural/Cartoon/Caricature và chỉnh hình học → chọn một trong sáu biểu cảm, chỉnh mức độ → **Tải head.glb**. **Mở GLB** dùng để xem lại file đã tải. Khi export, ứng dụng cũng đọc lại GLB và đối chiếu bounds trước khi tải xuống.
+Mở **http://localhost:5187**. Chọn ảnh → crop → **Dựng đầu 3D** → xem 360°, đổi style/hình học/biểu cảm → tải GLB hoặc mở lại file. Demo dùng API cấp thấp của cùng SDK cho các công cụ chẩn đoán; không có pipeline thuật toán riêng.
 
-`assets/` chứa bộ runtime hoàn chỉnh, gồm model MediaPipe, JS/WASM, template/anchors, mesh tai, rig sáu biểu cảm và răng/lưỡi. `asset-manifest.json` ghi nguồn, giấy phép, kích thước và SHA-256; plugin kiểm tra pin khi phục vụ hoặc đóng gói asset. Thiếu/sai file thì khôi phục đúng bản đã pin trong repo, không có lệnh generate hoặc tải model tự động.
+## Cấu hình CDN của thư viện
 
-## Dùng CDN sau này
+Mặc định không cần CDN hoặc cấu hình ở app. Khi có CDN, upload nội dung `assets/` từ repo và đặt `assetBaseUrl` trong **`portrait-head.config.js` của thư viện** thành URL thư mục CDN có phiên bản, giữ nguyên tên file và thư mục. Cập nhật package thư viện cho các consumer; không đặt biến CDN trong từng app.
 
-Upload nội dung `assets/` lên một thư mục CDN có phiên bản, giữ nguyên tên file và cấu trúc thư mục. Consumer truyền URL thư mục đó vào `assetBaseUrl`; app MoodLab hỗ trợ biến `ML_PORTRAIT_HEAD_ASSET_BASE_URL`. Để trống biến này thì dùng asset đóng gói sẵn. Khi cấu hình CDN, app bỏ đính kèm bản asset local.
+SDK vẫn kiểm tra checksum rồi cung cấp Blob URL cho worker. CDN cần cho phép CORS từ origin ứng dụng. Nếu host có CSP, cần cho phép Blob worker/script, kết nối Blob và WebAssembly; thêm origin CDN vào `connect-src` khi dùng CDN. Demo đã có các quyền Blob cần thiết. Chưa có upload hoặc deployment nào được thực hiện.
 
-Hai worker được host bundle cùng mã ứng dụng; model và JS/WASM có thể ở CDN. CDN cần cho phép CORS từ origin ứng dụng và phục vụ `.wasm` với MIME `application/wasm`; CSP của host cần cho phép CDN ở `connect-src` và `script-src`. Không có thao tác upload CDN trong repo này.
+## Phát triển SDK
 
-Việc dựng đầu tiếp tục chạy trên thiết bị; request ra host asset chỉ tải file tĩnh, không upload ảnh hoặc gọi inference API. Metadata giấy phép FaceVerse giữ nguyên trạng thái chưa xác minh quyền phân phối dữ liệu model; nguồn và bằng chứng tại [THIRD_PARTY_ASSETS](docs/THIRD_PARTY_ASSETS.md).
+Runtime đã chuẩn bị sẵn để consumer dùng ngay. Sau khi sửa source SDK hoặc thay asset pin, người phát triển thư viện chạy `npm run prepare:runtime` để cập nhật JS, typings, worker và payload. Đây là đóng gói artifact của SDK, không phải bước triển khai tại app, không tải model hay chạy kiểm thử. TypeScript/esbuild ở root chỉ là devDependency của công cụ đóng gói SDK; Vite vẫn chỉ ở demo. Gói phân phối loại source tooling và demo.
+
+Metadata giấy phép FaceVerse giữ nguyên trạng thái chưa xác minh quyền phân phối model; nguồn và bằng chứng tại [THIRD_PARTY_ASSETS](docs/THIRD_PARTY_ASSETS.md).
 
 ## Có gì trong bản thử
 

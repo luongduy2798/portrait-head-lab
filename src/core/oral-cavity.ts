@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { expressionControls, expressionIntensityMultiplier, mouthTransform, updateExpressionBounds, type ExpressionName } from './expressions';
-import type { ExpressionRigAsset } from './expression-rig';
-import type { Point3 } from './types';
+import { expressionControls, expressionIntensityMultiplier, mouthTransform, updateExpressionBounds, type ExpressionName } from './expressions.js';
+import type { ExpressionRigAsset } from './expression-rig.js';
+import type { Point3 } from './types.js';
 
 interface OralSurface {
   name: string;
