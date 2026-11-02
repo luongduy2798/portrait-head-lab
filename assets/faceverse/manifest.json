@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "provider": "FaceVerse v4",
+    "sourceUrl": "https://static.moodlab.dev/faceverse/",
+    "sourceManifestSHA256": "584bcea7cb15bc29c4c1d6fad542efd4ad1ef6da336bbe595f6b5c231bb75514",
+    "sourceCommit": "19c67cc4d7234b1ea7d55a185a2cb55fd49bb877",
+    "sourceModelSHA256": "077df2658add90ea22ac9675967e38edf56170822c2a7acfe40bda55a9ed3702",
+    "basisSHA256": "9b23ad5d087f0d109e098f903c33a5e33da9807677f09f245829a77932c2693a",
+    "expressionSHA256": "bd489640bdc41a2fefc5ac432c1a515eb8af7347f422b208c129ce4611d8ca31",
+    "licenseSHA256": "f726d74d9df4062476c26b2d2d01fd74efe60cd87bed507d2488da1be718753e",
+    "licenseVerified": false
+  },
+  "assets": [
+    {
+      "name": "head-template.json",
+      "sha256": "476ba2aa7d50040a3a789f3d2a03fd6de11e8205fea9a93e7db0509013bfa50c",
+      "bytes": 1476454,
+      "source": "scripts/prepare-faceverse-template.mjs + pinned MoodLab CDN FaceVerse v4 mean mesh",
+      "license": "MoodLab CDN FaceVerse v4 bundle; model-data terms not independently verified"
+    },
+    {
+      "name": "landmark-anchors.json",
+      "sha256": "27f02278e220aef70c362a999722b21df06698c312f79eee14babdb62d9a378c",
+      "bytes": 55008,
+      "source": "scripts/prepare-faceverse-template.mjs + pinned canonical_face_model.obj",
+      "license": "Apache-2.0 derivative"
+    },
+    {
+      "name": "head-neutral.glb",
+      "sha256": "cacc47b895e62dd14336304f4891b35f041d9e34f92cc4a42bfd7ea69cf07064",
+      "bytes": 460664,
+      "source": "scripts/prepare-faceverse-template.mjs + pinned MoodLab CDN FaceVerse v4 mean mesh",
+      "license": "MoodLab CDN FaceVerse v4 bundle; model-data terms not independently verified"
+    },
+    {
+      "name": "faceverse-neutral.glb",
+      "sha256": "0de714251964c2db70cdf1286dc5e9f899ce1dce9d78877ba58629de4b32b93f",
+      "bytes": 1170660,
+      "source": "scripts/prepare-faceverse-template.mjs + pinned MoodLab CDN FaceVerse v4 mean mesh",
+      "license": "MoodLab CDN FaceVerse v4 bundle; model-data terms not independently verified"
+    }
+  ]
+}

@@ -4,4 +4,3 @@ dist/
 *.local
 reports/
 .cache/
-public/assets/faceverse/

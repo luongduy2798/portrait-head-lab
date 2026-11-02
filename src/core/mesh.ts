@@ -95,7 +95,7 @@ function closeNeutralLips(positions: Point3[]): Point3[] {
 
 /** Corner-angle weighting avoids letting the largest triangles dominate the
  * shading where the facial mesh joins the differently spaced loft rings. */
-function computeSmoothNormals(geometry: THREE.BufferGeometry) {
+export function computeSmoothNormals(geometry: THREE.BufferGeometry) {
   const position = geometry.getAttribute('position'), index = geometry.getIndex();
   if (!index) throw new Error('Lưới đầu cần chỉ mục để tính pháp tuyến liền mạch.');
   const normals = new Float32Array(position.count * 3);
@@ -230,7 +230,7 @@ function measuredContourScale(vertical: number, measurements?: HeadMeasurements)
   return measurements.foreheadScale;
 }
 
-function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measurements?: HeadMeasurements, includeOralCavity = true): NaturalHead {
+function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measurements?: HeadMeasurements, includeOralCavity = true, openNeck = false): NaturalHead {
   const canonicalCount = template.canonicalCount;
   if (
     canonicalCount !== 468 || template.positions.length < canonicalCount ||
@@ -365,25 +365,27 @@ function buildNaturalHead(template: HeadTemplate, params: ShapeParams, measureme
   const lastProfile = profile[profile.length - 1];
   const bottomZ = (lastProfile[1] + lastProfile[3]) * 0.5;
   const baseRing = previousRing;
-  // Concentric cap rings isolate the high-valence centre from the neck rim;
-  // a direct fan made radial dents along the visible bottom edge after Loop.
-  for (const radius of [0.65, 0.3]) {
-    const ring = baseRing.map((id, index) => addVertex([
-      positions[id][0] * radius, lastProfile[0], bottomZ + (positions[id][2] - bottomZ) * radius,
-    ], 'neck', [index / boundary.length, 0], 1));
-    connectRings(previousRing, ring);
-    previousRing = ring;
-  }
-  const bottomCenter = addVertex([0, lastProfile[0], bottomZ], 'neck', [0.5, 0], 1);
-  for (let index = 0; index < previousRing.length; index++) {
-    const next = (index + 1) % previousRing.length;
-    triangles.push(faceUsesForward
-      ? [previousRing[next], previousRing[index], bottomCenter]
-      : [previousRing[index], previousRing[next], bottomCenter]);
+  if (!openNeck) {
+    // Concentric cap rings isolate the high-valence centre from the neck rim;
+    // a direct fan made radial dents along the visible bottom edge after Loop.
+    for (const radius of [0.65, 0.3]) {
+      const ring = baseRing.map((id, index) => addVertex([
+        positions[id][0] * radius, lastProfile[0], bottomZ + (positions[id][2] - bottomZ) * radius,
+      ], 'neck', [index / boundary.length, 0], 1));
+      connectRings(previousRing, ring);
+      previousRing = ring;
+    }
+    const bottomCenter = addVertex([0, lastProfile[0], bottomZ], 'neck', [0.5, 0], 1);
+    for (let index = 0; index < previousRing.length; index++) {
+      const next = (index + 1) % previousRing.length;
+      triangles.push(faceUsesForward
+        ? [previousRing[next], previousRing[index], bottomCenter]
+        : [previousRing[index], previousRing[next], bottomCenter]);
+    }
   }
 
   const mouthRim = [...upperLipRim, ...lowerLipRim.slice(1, -1).reverse()];
-  const cage: HeadSurface = { positions: relaxNapeCage(positions, triangles, canonicalCount, lastProfile[0], headScale), parts, uv, triangles, skinFade, faceTriangleCount, mouthRim };
+  const cage: HeadSurface = { positions: relaxNapeCage(positions, triangles, canonicalCount, lastProfile[0], headScale), parts, uv, triangles, skinFade, faceTriangleCount, mouthRim, neckRim: openNeck ? baseRing : undefined };
   return { identity, neutral, cage };
 }
 
@@ -570,6 +572,8 @@ function createUnwrappedSkinGeometry(source: THREE.BufferGeometry, indices: numb
   const normal = source.getAttribute('normal') as THREE.BufferAttribute;
   const color = source.getAttribute('color') as THREE.BufferAttribute;
   const positions: number[] = [], normals: number[] = [], colors: number[] = [], outputUvs: number[] = [];
+  const sourceVertex = source.getAttribute('_portraitVertex');
+  const sourceVertices: number[] = [];
   const morphs = (Object.entries(source.morphAttributes) as [keyof typeof source.morphAttributes, THREE.BufferAttribute[]][]).map(([name, attributes]) => ({
     name,
     attributes,
@@ -592,6 +596,7 @@ function createUnwrappedSkinGeometry(source: THREE.BufferGeometry, indices: numb
       append(normal, id, normals);
       append(color, id, colors);
       outputUvs.push(triangleU[corner], uvs[id * 2 + 1]);
+      if (sourceVertex) sourceVertices.push(sourceVertex.getX(id));
       for (const morph of morphs) for (let morphIndex = 0; morphIndex < morph.attributes.length; morphIndex++) {
         append(morph.attributes[morphIndex], id, morph.values[morphIndex]);
       }
@@ -603,6 +608,7 @@ function createUnwrappedSkinGeometry(source: THREE.BufferGeometry, indices: numb
   result.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   result.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   result.setAttribute('uv', new THREE.Float32BufferAttribute(outputUvs, 2));
+  if (sourceVertex) result.setAttribute('_portraitVertex', new THREE.Uint32BufferAttribute(sourceVertices, 1));
   for (const morph of morphs) {
     result.morphAttributes[morph.name] = morph.values.map((values, index) => {
       const attribute = new THREE.Float32BufferAttribute(values, morph.attributes[index].itemSize);
@@ -773,6 +779,9 @@ function addEars(group: THREE.Group, head: THREE.Mesh, source: EarTemplate, para
 }
 
 export interface HeadBuildOptions {
+  /** Keep the generated neck open for the mobile body adapter. */
+  openNeck?: boolean;
+  onNeutralSurface?: (geometry: THREE.BufferGeometry, surface: HeadSurface) => void;
   includeExpressions?: boolean;
   includeEars?: boolean;
   includeOralCavity?: boolean;
@@ -785,7 +794,7 @@ export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: Exp
   const includeExpressions = options.includeExpressions ?? Boolean(rig);
   const includeEars = options.includeEars ?? Boolean(ears);
   const includeOralCavity = options.includeOralCavity ?? Boolean(rig);
-  const natural = buildNaturalHead(template, effective, result?.fit.measurements, includeOralCavity);
+  const natural = buildNaturalHead(template, effective, result?.fit.measurements, includeOralCavity, options.openNeck);
   let generated: HeadSurface;
   let deltaSurfaces: Point3[][] = [];
   if (includeExpressions && rig) {
@@ -812,6 +821,10 @@ export function createHead(template: HeadTemplate, ears?: EarTemplate, rig?: Exp
   geometry.addGroup(generated.faceTriangleCount * 3, (generated.triangles.length - generated.faceTriangleCount) * 3, 1);
   computeSmoothNormals(geometry);
   if (includeExpressions && rig) addExpressionTargets(geometry, generated, deltaSurfaces);
+  if (options.onNeutralSurface) {
+    geometry.setAttribute('_portraitVertex', new THREE.Uint32BufferAttribute(Array.from({ length: generated.positions.length }, (_, id) => id), 1));
+    options.onNeutralSurface(geometry, generated);
+  }
 
   let minY = Infinity, maxY = -Infinity;
   for (const point of generated.positions) {

@@ -2,7 +2,7 @@
 
 Không có kết quả pass trong tài liệu này. Chỉ chạy các kiểm tra tự động khi sư tổ yêu cầu rõ.
 
-Chạy `npm run dev` và mở `http://localhost:5187`. Mesh đầu–cổ được tạo trực tiếp từ template canonical cục bộ; không cần tải model đầu 3D từ CDN.
+Từ thư mục `demo/`, chạy `npm run dev` và mở `http://localhost:5187`. Demo có bộ dependency riêng; core không cài Vite. Mesh đầu–cổ được tạo trực tiếp từ template canonical cục bộ; không cần tải model đầu 3D từ CDN.
 
 1. Xác nhận trang chỉ tải asset cùng origin; không có request tới FaceVerse/MoodLab CDN. Đầu mẫu phải có mặt, sọ, hai tai và cổ. Xem front/¾/back, bật lưới mesh, kiểm tra vùng nối mặt–sọ và hàm–cổ.
 2. Chọn ít nhất 5 ảnh được phép dùng có mặt/mũi/hàm khác nhau. Crop, thử ảnh xoay/zoom. So sánh các mesh bằng **Da phẳng** để không nhầm texture với khác biệt hình học.
@@ -20,4 +20,4 @@ Chạy `npm run dev` và mở `http://localhost:5187`. Mesh đầu–cổ đư�
 
 Đánh giá likeness cần 30–50 ảnh có quyền dùng và người chấm: front/¾, Natural/Cartoon riêng. Không dùng NME thay blind test. Ưu tiên kiểm tra mặt béo/gầy, hàm rộng/hẹp, ảnh có kính và độ tự nhiên của gáy/cổ ở góc nghiêng.
 
-Nếu được yêu cầu kiểm tra kỹ thuật, script `npm run build` chạy TypeScript + Vite. Chưa thêm unit test chỉ để mô phỏng implementation; các kiểm tra có giá trị tiếp theo là synthetic fitting với pose biết trước, occlusion/UV raster, bounds GLB round-trip và cancel race trên browser thật.
+Nếu được yêu cầu kiểm tra kỹ thuật, `npm run build` trong `demo/` chạy TypeScript + Vite của demo. Chưa thêm unit test chỉ để mô phỏng implementation; các kiểm tra có giá trị tiếp theo là synthetic fitting với pose biết trước, occlusion/UV raster, bounds GLB round-trip và cancel race trên browser thật.

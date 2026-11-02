@@ -1,5 +1,7 @@
 import { expressionControls, expressionSet, type ExpressionName } from './expressions';
 import type { Point3 } from './types';
+import { headAssetURL, waitForHeadAssets, type HeadAssetOptions } from '../assets';
+import { HeadError } from '../errors';
 
 export interface OralRigSurface {
   name: 'tongue' | 'lowerTeeth' | 'upperTeeth';
@@ -23,28 +25,30 @@ const record = (value: unknown): value is Record<string, unknown> => typeof valu
 const points = (value: unknown, count: number): value is Point3[] => Array.isArray(value) && value.length === count &&
   value.every((point) => Array.isArray(point) && point.length === 3 && point.every((n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) < 10000));
 const deltas = (value: unknown, count: number) => record(value) && expressionControls.every(([name]) => points(value[name], count));
-let pending: Promise<ExpressionRigAsset> | undefined;
+const pendingAssets = new Map<string, Promise<ExpressionRigAsset>>();
 
-export function loadExpressionRig(): Promise<ExpressionRigAsset> {
+export function loadExpressionRig(options: HeadAssetOptions, signal?: AbortSignal): Promise<ExpressionRigAsset> {
+  signal?.throwIfAborted();
+  const base = headAssetURL(options, 'faceverse/');
+  let pending = pendingAssets.get(base);
   pending ??= (async () => {
-    const base = '/assets/faceverse/';
     const manifestResponse = await fetch(`${base}expression-rig-manifest.json`, { cache: 'no-cache' });
-    if (!manifestResponse.ok) throw new Error('Thiếu rig biểu cảm local. Chạy npm run assets:expressions để chuẩn bị.');
+    if (!manifestResponse.ok) throw new Error('Không tải được manifest biểu cảm. Kiểm tra assetBaseUrl và file trên host.');
     const manifest: unknown = await manifestResponse.json();
     if (!record(manifest) || manifest.schemaVersion !== 1 || manifest.expressionSet !== expressionSet || manifest.file !== 'expression-rig.json' ||
       typeof manifest.bytes !== 'number' || !Number.isSafeInteger(manifest.bytes) || manifest.bytes <= 0 || manifest.bytes > 8_000_000 ||
       typeof manifest.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(manifest.sha256) ||
       !record(manifest.source) || manifest.source.sourceCommit !== sourceCommit || !record(manifest.source.files)) {
-      throw new Error('Manifest rig biểu cảm không khớp phiên bản local.');
+      throw new Error('Manifest rig biểu cảm không khớp phiên bản đã pin.');
     }
     const files = manifest.source.files;
     if (!record(files['basis.bin']) || files['basis.bin'].sha256 !== sourceBasis ||
       !record(files['expression.bin']) || files['expression.bin'].sha256 !== sourceExpressions) throw new Error('Rig biểu cảm không dùng basis FaceVerse đã pin.');
     const response = await fetch(`${base}expression-rig.json?v=${manifest.sha256}`, { cache: 'force-cache' });
-    if (!response.ok) throw new Error('Không đọc được rig biểu cảm local. Chạy npm run assets:expressions để chuẩn bị.');
+    if (!response.ok) throw new Error('Không tải được asset biểu cảm. Kiểm tra assetBaseUrl và file trên host.');
     const bytes = await response.arrayBuffer();
     const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (value) => value.toString(16).padStart(2, '0')).join('');
-    if (bytes.byteLength !== manifest.bytes || digest !== manifest.sha256) throw new Error('Checksum rig biểu cảm không khớp. Hãy chuẩn bị lại asset local.');
+    if (bytes.byteLength !== manifest.bytes || digest !== manifest.sha256) throw new Error('Checksum rig biểu cảm không khớp bản đã pin. Kiểm tra file trên host.');
     const asset: unknown = JSON.parse(new TextDecoder().decode(bytes));
     if (!record(asset) || asset.schemaVersion !== 1 || asset.expressionSet !== expressionSet || asset.units !== 'centimetres' ||
       !points(asset.landmarks, 468) || !deltas(asset.deltas, 468) || !Array.isArray(asset.oral) || asset.oral.length !== 3) throw new Error('Dữ liệu rig biểu cảm không hợp lệ.');
@@ -61,6 +65,7 @@ export function loadExpressionRig(): Promise<ExpressionRigAsset> {
       }
     }
     return asset as unknown as ExpressionRigAsset;
-  })().catch((error) => { pending = undefined; throw error; });
-  return pending;
+  })().catch(() => { pendingAssets.delete(base); throw new HeadError('assets'); });
+  pendingAssets.set(base, pending);
+  return waitForHeadAssets(pending, signal);
 }

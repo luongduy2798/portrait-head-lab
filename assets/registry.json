@@ -72,21 +72,21 @@
     },
     {
       "name": "head-template.json",
-      "source": "scripts/generate-template.mjs + pinned canonical_face_model.obj",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710: scripts/generate-template.mjs + pinned canonical_face_model.obj (prepared output)",
       "sha256": "486f61828023aa66e7f5918cdd2a7aa1520dbd9a3184a0459061ecb3509f1f6f",
       "bytes": 234052,
       "license": "Apache-2.0 derivative; original procedural cranium and ears"
     },
     {
       "name": "landmark-anchors.json",
-      "source": "scripts/generate-template.mjs + pinned canonical_face_model.obj",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710: scripts/generate-template.mjs + pinned canonical_face_model.obj (prepared output)",
       "sha256": "4e12439a92a0b1c02d635dca33addacec5715bdd96d98f2e3d10c1c85f469930",
       "bytes": 55007,
       "license": "Apache-2.0 derivative; original procedural cranium and ears"
     },
     {
       "name": "head-neutral.glb",
-      "source": "scripts/generate-template.mjs + pinned canonical_face_model.obj",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710: scripts/generate-template.mjs + pinned canonical_face_model.obj (prepared output)",
       "sha256": "e9a9d22d10bf08e0b1c6899f1f834b3de926906f94e1ef0745df82e1a471d5b8",
       "bytes": 117148,
       "license": "Apache-2.0 derivative; original procedural cranium and ears"

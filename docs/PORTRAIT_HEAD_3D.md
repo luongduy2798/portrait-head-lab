@@ -2,6 +2,12 @@
 
 ## Luồng xử lý
 
+Core và hai worker ở `src/`, asset ở `assets/` tại root; web demo ở `demo/` và app MoodLab
+cùng import `@twa/portrait-head`. Luồng dưới mô tả demo: canvas crop thủ công được
+giữ nguyên. Với app, `File` được tự căn/xoay và crop trong analysis worker trước
+khi đi qua cùng thuật toán fit/texture/mesh. App tự ghép body và quản lý dữ liệu
+đã lưu; các giới hạn RAM/tải file dưới đây nói về demo.
+
 `File → createImageBitmap (orientation) → crop canvas 1024 → analysis.worker.js (CPU/WASM) → generate.worker.ts (fit + texture) → Three.js → GLTFExporter → GLTFLoader → download`.
 
 Ảnh chỉ được truyền giữa main thread/worker bằng ImageBitmap hoặc typed array. Template, landmark anchors và model MediaPipe được phục vụ từ repo; mesh đầu–cổ được tạo trực tiếp trong trình duyệt bằng hình học thủ tục. Không có inference API bên ngoài, backend hay analytics. Tai dùng vùng mesh trung tính FaceVerse đã có sẵn local, không chạy FaceVerse inference. Thông số shape chỉ nằm trong GLB được người dùng chủ động tải; ảnh crop/landmark không đi vào báo cáo số đo.
@@ -10,7 +16,7 @@
 
 ## Template và anchors
 
-`vendor/canonical_face_model.obj` là facial surface 468 đỉnh từ MediaPipe, pin commit trong `vendor/mediapipe-source.json`. Script `scripts/generate-template.mjs` tạo template schema v1 và barycentric anchors. Runtime chỉ dùng 468 đỉnh mặt cùng 898 tam giác đầu tiên; các vùng sọ/gáy/cổ được dựng mới bằng loft liền từ đường biên mặt xuống đáy cổ. Profile phía trên đi qua đỉnh sọ, chẩm và gáy; profile phía dưới tạo vùng dưới cằm rồi chuyển xuống cổ trước. Các vòng dùng chung đỉnh và normal, chỉ đóng mặt ở đáy cổ. Không dùng mesh đầu trung bình từ model bên ngoài.
+`vendor/canonical_face_model.obj` là facial surface 468 đỉnh từ MediaPipe, pin commit trong `vendor/mediapipe-source.json`. Template schema v1 và barycentric anchors đã có sẵn trong `assets/`, không cần generator khi cài hoặc triển khai. Runtime chỉ dùng 468 đỉnh mặt cùng 898 tam giác đầu tiên; các vùng sọ/gáy/cổ được dựng mới bằng loft liền từ đường biên mặt xuống đáy cổ. Profile phía trên đi qua đỉnh sọ, chẩm và gáy; profile phía dưới tạo vùng dưới cằm rồi chuyển xuống cổ trước. Các vòng dùng chung đỉnh và normal, chỉ đóng mặt ở đáy cổ. Không dùng mesh đầu trung bình từ model bên ngoài.
 
 Lưới preview/GLB dùng cage sọ/cổ thưa, cổ có tiết diện rộng và ba lượt Loop subdivision trên toàn bộ mặt–sọ–cổ. Không khóa các đỉnh trong mặt: chia nhỏ tuyến tính ở vùng bị khóa sẽ giữ nguyên các mảng phẳng. Normals cộng theo góc ở đỉnh để giảm chênh lệch shading giữa tam giác mặt và các vòng cổ; màu da chuyển liên tục theo vị trí thay vì đổi nhóm mẫu đột ngột theo từng đỉnh. UV được nội suy trong từng tam giác canonical, các nhóm vật liệu mặt/da được giữ. Template và anchors dùng cho fitter không thay đổi; làm mượt có dịch chuyển các đỉnh hiển thị so với cage dùng để fit. Chi phí xử lý và kích thước GLB sau chia nhỏ chưa được đo.
 
@@ -48,7 +54,7 @@ Natural giữ shape fit; Cartoon tăng mắt/má nhẹ và giảm mũi, đổi r
 
 ## Sáu biểu cảm hiển thị
 
-Unbothered, Locked in, Cracking up, Full panic, Big winner và Spectacular flop dùng đúng hệ số FaceVerse từ worker mobile. Bước `assets:expressions` trích sẵn sáu trường dịch chuyển tại 468 landmark từ basis đã pin; runtime không chạy ResNet/FaceVerse inference. Delta được chuyển bằng khung affine cục bộ trên one-ring canonical sang cage đã fit identity, có ràng buộc pháp tuyến và fallback căn tương đồng khi suy biến; sau đó chia nhỏ cùng topology với đầu trung tính. Chuyển động hàm lan giảm dần vào ba vòng cổ sát mặt. Hình học sọ và tham số identity vẫn thuộc pipeline hiện tại.
+Unbothered, Locked in, Cracking up, Full panic, Big winner và Spectacular flop dùng đúng hệ số FaceVerse từ worker mobile. Sáu trường dịch chuyển tại 468 landmark đã trích từ basis đã pin và lưu sẵn trong `assets/faceverse/expression-rig.json`; runtime không chạy ResNet/FaceVerse inference. Delta được chuyển bằng khung affine cục bộ trên one-ring canonical sang cage đã fit identity, có ràng buộc pháp tuyến và fallback căn tương đồng khi suy biến; sau đó chia nhỏ cùng topology với đầu trung tính. Chuyển động hàm lan giảm dần vào ba vòng cổ sát mặt. Hình học sọ và tham số identity vẫn thuộc pipeline hiện tại.
 
 Mức độ 0–100% tương ứng trọng số 0–2 như mobile; Unbothered là pose nghỉ, nút Trung tính đặt mọi weights về 0. Thay đổi mức độ chỉ cập nhật morph influences. Đổi hình học/style dựng lại targets nhưng giữ lựa chọn hiện tại; dựng từ ảnh mới trở về trung tính. Bounds culling bao cả mức 2×, không dùng làm số đo hình dạng ở pose hiện tại.
 

@@ -1,15 +1,18 @@
 import './style.css';
 import * as THREE from 'three';
-import { PortraitCropper } from './core/cropper';
-import { createHead, disposeObject, updateFlatAppearance } from './core/mesh';
-import { loadEarTemplate, type EarTemplate } from './core/ears';
-import { applyExpression, controlsForObject, expressionControls, readExpression, supportsExpressions, type ExpressionSelection } from './core/expressions';
-import { loadExpressionRig, type ExpressionRigAsset } from './core/expression-rig';
-import { HeadPipeline, loadTemplate } from './core/pipeline';
-import { HeadViewer } from './core/viewer';
-import { download, exportHead, inspectGLB } from './core/exporter';
-import { manualKeys, shapeControls } from './core/shape';
-import type { Analysis, HeadResult, HeadTemplate, ShapeParams, Style } from './core/types';
+import {
+  createHead, disposeObject, updateFlatAppearance, loadEarTemplate, loadExpressionRig,
+  applyExpression, controlsForObject, expressionControls, readExpression, supportsExpressions,
+  HeadPipeline, loadTemplate, exportHead, inspectGLB, manualKeys, shapeControls,
+  type EarTemplate, type ExpressionSelection, type ExpressionRigAsset,
+  type Analysis, type HeadResult, type HeadTemplate, type ShapeParams, type Style,
+} from '@twa/portrait-head';
+import { PortraitCropper } from './cropper';
+import { HeadViewer } from './viewer';
+import { download } from './download';
+import { headErrorMessage, headProgressLabel } from './head-ui';
+
+const assets = { assetBaseUrl: new URL(`${import.meta.env.BASE_URL}assets/portrait-head/`, location.origin).href };
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header class="header">
@@ -58,7 +61,7 @@ const element = <T extends HTMLElement = HTMLElement>(id: string) => document.ge
 const input = (id: string) => element<HTMLInputElement>(id);
 const button = (id: string) => element<HTMLButtonElement>(id);
 const cropper = new PortraitCropper(element<HTMLCanvasElement>('crop'));
-const pipeline = new HeadPipeline();
+const pipeline = new HeadPipeline(assets);
 let viewer: HeadViewer | undefined;
 let template: HeadTemplate | undefined;
 let ears: EarTemplate | undefined;
@@ -115,7 +118,7 @@ function refreshMesh(fit = !viewer?.getHead(), previewOnly = false) {
 }
 function ensureGenerationAssets() {
   if (ears && expressionRig) return Promise.resolve();
-  generationAssets ??= Promise.all([loadEarTemplate(), loadExpressionRig()]).then(([earTemplate, rig]) => {
+  generationAssets ??= Promise.all([loadEarTemplate(assets), loadExpressionRig(assets)]).then(([earTemplate, rig]) => {
     ears = earTemplate;
     expressionRig = rig;
   }).catch((error) => {
@@ -202,7 +205,7 @@ async function selectPhoto(file?: File) {
     element('crop').hidden = false; element('upload-prompt').hidden = true; element('crop-hint').hidden = false;
     element('filename').textContent = file.name;
     input('zoom').value = '1'; input('rotate').value = '0'; setBusy(false);
-  } catch (error) { showError(error instanceof Error ? error.message : 'Không đọc được ảnh.'); }
+  } catch (error) { showError(headErrorMessage(error, 'Không đọc được ảnh.')); }
   finally {
     photoLoading = false;
     photoPickerOpen = false;
@@ -273,8 +276,9 @@ button('generate').addEventListener('click', async () => {
       if (token !== lifecycle || request !== generationSequence) return;
     }
     const crop = cropper.capture();
-    const generated = await pipeline.generate(crop, ({ phase, progress }) => { element('phase').textContent = phase; element<HTMLProgressElement>('progress').value = progress; });
+    const generated = await pipeline.generate(crop, ({ phase, progress }) => { element('phase').textContent = headProgressLabel[phase]; element<HTMLProgressElement>('progress').value = progress; });
     if (token !== lifecycle || request !== generationSequence) return;
+    element<HTMLProgressElement>('progress').value = 1;
     result = generated.result; analysis = generated.analysis; template = generated.template;
     imported = false; params = { ...result.fit.params }; currentExpression = 'neutral';
     timings.push({ ...result.timings }); if (timings.length > 100) timings.shift();
@@ -286,7 +290,7 @@ button('generate').addEventListener('click', async () => {
     drawDiagnostics(crop, analysis, result);
     if (result.fit.warnings.length) showError(result.fit.warnings.join(' '));
   } catch (error) {
-    if (!(error instanceof DOMException && error.name === 'AbortError')) showError(error instanceof Error ? error.message : 'Không thể dựng đầu 3D.');
+    if (!(error instanceof DOMException && error.name === 'AbortError')) showError(headErrorMessage(error, 'Không thể dựng đầu 3D.'));
   } finally { if (request === generationSequence) setBusy(false); }
 });
 button('cancel').addEventListener('click', () => {
@@ -326,7 +330,7 @@ button('export').addEventListener('click', async () => {
     if (result) result.timings.export = elapsed;
     download(data, 'head.glb', 'model/gltf-binary');
     element('result-summary').textContent = `Đã xuất và đọc lại GLB · ${(data.byteLength / 1048576).toFixed(2)} MB · ${checked.stats.vertexCount.toLocaleString('vi')} đỉnh · ${elapsed.toFixed(0)} ms`;
-  } catch (error) { showError(error instanceof Error ? error.message : 'Không xuất được GLB.'); }
+  } catch (error) { showError(headErrorMessage(error, 'Không xuất được GLB.')); }
   finally { exporting = false; setBusy(false); }
 });
 button('screenshot').addEventListener('click', () => {
@@ -350,7 +354,7 @@ input('glb').addEventListener('change', async () => {
     element<HTMLOutputElement>('expression-value').value = `${Math.round(active.strength * 100)}%`;
     updateSliders(); setBusy(false); element('model-status').textContent = 'GLB mở lại';
     element('result-summary').textContent = `GLB · ${loaded.stats.meshCount} mesh · ${loaded.stats.vertexCount.toLocaleString('vi')} đỉnh · ${loaded.stats.textured} vật liệu có texture`;
-  } catch (error) { showError(error instanceof Error ? error.message : 'Không mở được GLB.'); }
+  } catch (error) { showError(headErrorMessage(error, 'Không mở được GLB.')); }
   finally { exporting = false; input('glb').value = ''; setBusy(false); }
 });
 button('report').addEventListener('click', () => {
@@ -365,7 +369,7 @@ async function initialize() {
   try {
     if (!window.Worker || !window.WebAssembly || !window.createImageBitmap || !window.OffscreenCanvas) throw new Error('Bản thử cần Worker, WebAssembly và OffscreenCanvas. Hãy dùng trình duyệt mới.');
     viewer = new HeadViewer(element('viewer'));
-    const loaded = await loadTemplate();
+    const loaded = await loadTemplate(assets);
     if (token !== lifecycle) return;
     template = loaded.template;
     // Show a lightweight head immediately; expensive ears and six expression
@@ -374,7 +378,7 @@ async function initialize() {
     element('model-status').textContent = 'Mesh đầu–cổ tự sinh';
     element('result-summary').textContent = `Mesh mẫu xem nhanh · ${vertexCount().toLocaleString('vi')} đỉnh · chọn ảnh để cá nhân hóa`;
     setBusy(false);
-  } catch (error) { showError(error instanceof Error ? error.message : 'Không khởi động được preview WebGL.'); }
+  } catch (error) { showError(headErrorMessage(error, 'Không khởi động được preview WebGL.')); }
 }
 void initialize();
 window.addEventListener('pagehide', () => {

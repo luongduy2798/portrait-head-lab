@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { smoothHeadSurface } from './subdivision';
 import type { Point3 } from './types';
+import { headAssetURL, waitForHeadAssets, type HeadAssetOptions } from '../assets';
+import { HeadError } from '../errors';
 
 export interface EarTemplate {
   positions: Point3[];
@@ -10,15 +12,17 @@ export interface EarTemplate {
   neighbors: number[][];
 }
 
-// Reuse the existing local evaluation asset; no model request leaves this origin.
-const sourcePath = '/assets/faceverse/faceverse-neutral.glb';
+// The prepared FaceVerse asset is pinned regardless of its configured host.
 const sourceSHA256 = '0de714251964c2db70cdf1286dc5e9f899ce1dce9d78877ba58629de4b32b93f';
-let pending: Promise<EarTemplate> | undefined;
+const pendingAssets = new Map<string, Promise<EarTemplate>>();
 
-export function loadEarTemplate(): Promise<EarTemplate> {
+export function loadEarTemplate(options: HeadAssetOptions, signal?: AbortSignal): Promise<EarTemplate> {
+  signal?.throwIfAborted();
+  const sourcePath = headAssetURL(options, 'faceverse/faceverse-neutral.glb');
+  let pending = pendingAssets.get(sourcePath);
   pending ??= (async () => {
     const response = await fetch(sourcePath, { cache: 'force-cache' });
-    if (!response.ok) throw new Error('Thiếu mesh FaceVerse local để dựng tai.');
+    if (!response.ok) throw new Error('Không tải được asset tai FaceVerse. Kiểm tra assetBaseUrl và file trên host.');
     const bytes = await response.arrayBuffer();
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     const checksum = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
@@ -88,6 +92,7 @@ export function loadEarTemplate(): Promise<EarTemplate> {
         for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.dispose();
       });
     }
-  })().catch((error) => { pending = undefined; throw error; });
-  return pending;
+  })().catch(() => { pendingAssets.delete(sourcePath); throw new HeadError('assets'); });
+  pendingAssets.set(sourcePath, pending);
+  return waitForHeadAssets(pending, signal);
 }

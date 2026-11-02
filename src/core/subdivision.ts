@@ -2,6 +2,7 @@ import type { HeadPart, Point2, Point3 } from './types';
 
 export interface HeadSurface {
   mouthRim?: number[];
+  neckRim?: number[];
   positions: Point3[];
   parts: HeadPart[];
   uv: Point2[];
@@ -90,7 +91,8 @@ export function smoothHeadSurfaceFields(head: HeadSurface, fields: Point3[][], p
       triangles.push([a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]);
     }
     const mouthRim = surface.mouthRim?.flatMap((id, i, rim) => [id, edges.get(edgeKey(id, rim[(i + 1) % rim.length]))!.vertex]);
-    surface = { positions, parts, uv, triangles, skinFade, photoPoints, mouthRim, faceTriangleCount: surface.faceTriangleCount * 4 };
+    const neckRim = surface.neckRim?.flatMap((id, i, rim) => [id, edges.get(edgeKey(id, rim[(i + 1) % rim.length]))!.vertex]);
+    surface = { positions, parts, uv, triangles, skinFade, photoPoints, mouthRim, neckRim, faceTriangleCount: surface.faceTriangleCount * 4 };
   }
   return { surface, fields: subdividedFields };
 }

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "expressionSet": "faceverse-mobile-v1",
+  "file": "expression-rig.json",
+  "bytes": 988658,
+  "sha256": "803077628044a2a3ec70ed8c69ef5851bb8970765ebbd44e49914b489e33a709",
+  "source": {
+    "provider": "FaceVerse v4",
+    "sourceUrl": "https://static.moodlab.dev/faceverse/",
+    "sourceCommit": "19c67cc4d7234b1ea7d55a185a2cb55fd49bb877",
+    "sourceModelSHA256": "077df2658add90ea22ac9675967e38edf56170822c2a7acfe40bda55a9ed3702",
+    "files": {
+      "basis.bin": {
+        "bytes": 48667900,
+        "sha256": "9b23ad5d087f0d109e098f903c33a5e33da9807677f09f245829a77932c2693a"
+      },
+      "expression.bin": {
+        "bytes": 20777456,
+        "sha256": "bd489640bdc41a2fefc5ac432c1a515eb8af7347f422b208c129ce4611d8ca31"
+      }
+    },
+    "licenseVerified": false,
+    "localEvaluationAuthorized": true,
+    "license": "Separate model-data distribution terms have not been independently verified; authorized for local evaluation only.",
+    "codeLicense": {
+      "file": "licenses/faceverse-code-mit.txt",
+      "sha256": "f726d74d9df4062476c26b2d2d01fd74efe60cd87bed507d2488da1be718753e"
+    },
+    "presetSource": "twa-moodlab-mobile/src/pages/Home/AvatarStudio/ThreeD/lib/faceverse-reconstruct.worker.ts",
+    "presetCoefficientsSHA256": "f68db582d5c373a626e82f6e3d831f6c2634982b663c950bb758ef00b2f81f15"
+  }
+}

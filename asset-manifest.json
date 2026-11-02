@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "9b8fb0355f628d56783e361f30ed3022fa70b710",
+  "mediapipeVersion": "0.10.35",
+  "threeVersion": "0.186.1",
+  "localEvaluationOnly": true,
+  "assets": [
+    {
+      "path": "face_landmarker.task",
+      "sourceFile": "assets/face_landmarker.task",
+      "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+      "bytes": 3758596,
+      "license": "Apache-2.0",
+      "source": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+    },
+    {
+      "path": "selfie_multiclass.tflite",
+      "sourceFile": "assets/selfie_multiclass.tflite",
+      "sha256": "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0",
+      "bytes": 16371837,
+      "license": "Apache-2.0",
+      "source": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite"
+    },
+    {
+      "path": "runtime/vision_wasm_internal.js",
+      "sourceFile": "assets/runtime/vision_wasm_internal.js",
+      "sha256": "e7fd9858e8e8f221d9b96eddc11f8e077f263e0b7bbd79d3cbe882b134274f8c",
+      "bytes": 322044,
+      "license": "Apache-2.0",
+      "source": "@mediapipe/tasks-vision@0.10.35"
+    },
+    {
+      "path": "runtime/vision_wasm_internal.wasm",
+      "sourceFile": "assets/runtime/vision_wasm_internal.wasm",
+      "sha256": "6a5c64584c2ab61c763b6e204afbdbc7ce1caf7f5216187322bca8df94f646bc",
+      "bytes": 11153617,
+      "license": "Apache-2.0",
+      "source": "@mediapipe/tasks-vision@0.10.35"
+    },
+    {
+      "path": "runtime/vision_wasm_module_internal.js",
+      "sourceFile": "assets/runtime/vision_wasm_module_internal.js",
+      "sha256": "1f1d6215324a1fe62f6742d49a3db911170987ca18ad8c1b75f1a1c82acf2b44",
+      "bytes": 322082,
+      "license": "Apache-2.0",
+      "source": "@mediapipe/tasks-vision@0.10.35"
+    },
+    {
+      "path": "runtime/vision_wasm_module_internal.wasm",
+      "sourceFile": "assets/runtime/vision_wasm_module_internal.wasm",
+      "sha256": "617b8e0248dbd27e9d7ece4218004eae4cefb499196d1bb4fa0e3fef21708756",
+      "bytes": 11153641,
+      "license": "Apache-2.0",
+      "source": "@mediapipe/tasks-vision@0.10.35"
+    },
+    {
+      "path": "runtime/vision_wasm_nosimd_internal.js",
+      "sourceFile": "assets/runtime/vision_wasm_nosimd_internal.js",
+      "sha256": "438d1fe8ff7f4d946025bc211c291543c037d8a3785ed4eee60f1f521b236296",
+      "bytes": 321847,
+      "license": "Apache-2.0",
+      "source": "@mediapipe/tasks-vision@0.10.35"
+    },
+    {
+      "path": "runtime/vision_wasm_nosimd_internal.wasm",
+      "sourceFile": "assets/runtime/vision_wasm_nosimd_internal.wasm",
+      "sha256": "8a3092d34c79d3f57e6ba8592105e8a90f6b07c27891ffecd14cca428bfd3e31",
+      "bytes": 10481398,
+      "license": "Apache-2.0",
+      "source": "@mediapipe/tasks-vision@0.10.35"
+    },
+    {
+      "path": "runtime/vision_bundle.js",
+      "sourceFile": "assets/runtime/vision_bundle.js",
+      "sha256": "6ebdf1c7e0efb64db5243bf1f30271225e8566e49faa472fefd886c7f96b0cf1",
+      "bytes": 137646,
+      "license": "Apache-2.0",
+      "source": "@mediapipe/tasks-vision@0.10.35"
+    },
+    {
+      "path": "head-template.json",
+      "sourceFile": "assets/head-template.json",
+      "sha256": "486f61828023aa66e7f5918cdd2a7aa1520dbd9a3184a0459061ecb3509f1f6f",
+      "bytes": 234052,
+      "license": "Apache-2.0 derivative; original procedural cranium and ears",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710: scripts/generate-template.mjs + pinned canonical_face_model.obj (prepared output)"
+    },
+    {
+      "path": "landmark-anchors.json",
+      "sourceFile": "assets/landmark-anchors.json",
+      "sha256": "4e12439a92a0b1c02d635dca33addacec5715bdd96d98f2e3d10c1c85f469930",
+      "bytes": 55007,
+      "license": "Apache-2.0 derivative; original procedural cranium and ears",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710: scripts/generate-template.mjs + pinned canonical_face_model.obj (prepared output)"
+    },
+    {
+      "path": "faceverse/faceverse-neutral.glb",
+      "sourceFile": "assets/faceverse/faceverse-neutral.glb",
+      "sha256": "0de714251964c2db70cdf1286dc5e9f899ce1dce9d78877ba58629de4b32b93f",
+      "bytes": 1170660,
+      "license": "FaceVerse model-data terms unverified; local evaluation only",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710"
+    },
+    {
+      "path": "faceverse/expression-rig.json",
+      "sourceFile": "assets/faceverse/expression-rig.json",
+      "sha256": "803077628044a2a3ec70ed8c69ef5851bb8970765ebbd44e49914b489e33a709",
+      "bytes": 988658,
+      "license": "FaceVerse model-data terms unverified; local evaluation only",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710"
+    },
+    {
+      "path": "faceverse/expression-rig-manifest.json",
+      "sourceFile": "assets/faceverse/expression-rig-manifest.json",
+      "sha256": "110f3c1df71e2302ff8549ec9d11f6aa0442b85d0a5bb2033ebc2cc764cf9b4e",
+      "bytes": 1349,
+      "license": "FaceVerse model-data provenance; local evaluation only",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710"
+    },
+    {
+      "path": "faceverse/manifest.json",
+      "sourceFile": "assets/faceverse/manifest.json",
+      "sha256": "13fd9cacb112d5676824f3dbcfc58e66ab1905a5e18cf93603d267f1d2aceba5",
+      "bytes": 2058,
+      "license": "FaceVerse model-data provenance; local evaluation only",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710"
+    },
+    {
+      "path": "licenses/mediapipe-apache-2.0.txt",
+      "sourceFile": "assets/licenses/mediapipe-apache-2.0.txt",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357,
+      "license": "Apache-2.0",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710"
+    },
+    {
+      "path": "licenses/three-mit.txt",
+      "sourceFile": "assets/licenses/three-mit.txt",
+      "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
+      "bytes": 1081,
+      "license": "MIT",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710"
+    },
+    {
+      "path": "licenses/faceverse-code-mit.txt",
+      "sourceFile": "assets/licenses/faceverse-code-mit.txt",
+      "sha256": "f726d74d9df4062476c26b2d2d01fd74efe60cd87bed507d2488da1be718753e",
+      "bytes": 1068,
+      "license": "MIT (upstream code only)",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710"
+    },
+    {
+      "path": "head-neutral.glb",
+      "sourceFile": "assets/head-neutral.glb",
+      "sha256": "e9a9d22d10bf08e0b1c6899f1f834b3de926906f94e1ef0745df82e1a471d5b8",
+      "bytes": 117148,
+      "license": "Apache-2.0 derivative; original procedural cranium and ears",
+      "source": "portrait-head-lab@9b8fb0355f628d56783e361f30ed3022fa70b710: scripts/generate-template.mjs + pinned canonical_face_model.obj (prepared output)"
+    }
+  ]
+}

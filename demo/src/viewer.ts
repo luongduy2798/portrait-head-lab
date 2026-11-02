@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { disposeObject } from './mesh';
+import { disposeObject } from '@twa/portrait-head';
 
 export class HeadViewer {
   private scene = new THREE.Scene();
