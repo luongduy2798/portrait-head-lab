@@ -44,11 +44,11 @@ export class HeadViewer {
     this.keyLight = new THREE.DirectionalLight(0xffffff, 0.8);
     this.keyLight.position.set(0, 0.4, 0.7);
     this.keyLight.castShadow = true;
-    this.keyLight.shadow.mapSize.set(1024, 1024);
+    this.keyLight.shadow.mapSize.set(2048, 2048);
     this.keyLight.shadow.camera.near = 0.01;
     this.keyLight.shadow.camera.far = 1.5;
-    this.keyLight.shadow.bias = -0.0001;
-    this.keyLight.shadow.normalBias = 0.002;
+    this.keyLight.shadow.bias = -0.00005;
+    this.keyLight.shadow.normalBias = 0.0004;
     this.keyLight.shadow.radius = 2;
     this.keyLight.shadow.autoUpdate = false;
     this.scene.add(this.keyLight);
@@ -119,6 +119,9 @@ export class HeadViewer {
       light.target.updateMatrixWorld();
     });
     const shadowExtent = Math.max(radius * 1.25, 0.12);
+    // A fixed 2 mm normal offset was larger than the ear folds, detaching
+    // their shadows into sawtooth bands. Scale the bias to the shadow texel.
+    this.keyLight.shadow.normalBias = 3.5 * shadowExtent / this.keyLight.shadow.mapSize.x;
     this.keyLight.shadow.camera.left = -shadowExtent;
     this.keyLight.shadow.camera.right = shadowExtent;
     this.keyLight.shadow.camera.top = shadowExtent;

@@ -41,6 +41,12 @@ export interface CameraFit extends Record<string, number> {
     ty: number;
 }
 export type ShapeParams = Record<string, number>;
+export interface EarMeasurement {
+    centerFromForehead: number;
+    heightToFace: number;
+    outsetToFace: number;
+    confidence: number;
+}
 export interface HeadMeasurements {
     faceAspectRatio: number;
     foreheadScale: number;
@@ -52,6 +58,11 @@ export interface HeadMeasurements {
     headWidthToFaceRatio?: number;
     neckWidthToFaceRatio?: number;
     neckLengthToFaceRatio?: number;
+    /** Visible silhouette only; left/right correspond to image -X/+X. */
+    ears?: {
+        left?: EarMeasurement;
+        right?: EarMeasurement;
+    };
 }
 export type Style = 'natural' | 'cartoon' | 'caricature';
 export interface GenerationOptions {

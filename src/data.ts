@@ -25,7 +25,13 @@ export function portraitHeadData(result: HeadResult): PortraitHeadData {
   return {
     schemaVersion: 1, generator: 'portrait-head-procedural-v1',
     sourceCommit: '9b8fb0355f628d56783e361f30ed3022fa70b710',
-    params: { ...fit.params }, measurements: { ...fit.measurements }, camera: { ...fit.camera }, appearance,
+    params: { ...fit.params }, measurements: {
+      ...fit.measurements,
+      ...(fit.measurements.ears ? { ears: {
+        ...(fit.measurements.ears.left ? { left: { ...fit.measurements.ears.left } } : {}),
+        ...(fit.measurements.ears.right ? { right: { ...fit.measurements.ears.right } } : {}),
+      } } : {}),
+    }, camera: { ...fit.camera }, appearance,
     ...(fit.identity ? { identity: { ...fit.identity, deltas: fit.identity.deltas.map((delta) => [...delta] as [number, number, number]) } } : {}),
   };
 }
@@ -43,6 +49,18 @@ export function isPortraitHeadData(value: unknown): value is PortraitHeadData {
     !['faceAspectRatio', 'foreheadScale', 'cheekScale', 'jawScale', 'lowerJawScale', 'chinScale']
       .every((key) => finite((value.measurements as Record<string, unknown>)[key])) || !record(value.appearance)) return false;
   const appearance = value.appearance;
+  if (value.measurements.ears !== undefined) {
+    const ears = value.measurements.ears;
+    if (!record(ears)) return false;
+    for (const side of ['left', 'right']) {
+      const ear = ears[side];
+      if (ear === undefined) continue;
+      if (!record(ear) || !finite(ear.centerFromForehead) || ear.centerFromForehead < 0.2 || ear.centerFromForehead > 0.75 ||
+        !finite(ear.heightToFace) || ear.heightToFace < 0.1 || ear.heightToFace > 0.5 ||
+        !finite(ear.outsetToFace) || ear.outsetToFace < 0 || ear.outsetToFace > 0.2 ||
+        !finite(ear.confidence) || ear.confidence < 0 || ear.confidence > 1) return false;
+    }
+  }
   if (value.identity !== undefined) {
     const identity = value.identity;
     if (!record(identity) || identity.version !== 1 || !finite(identity.depthConfidence) || identity.depthConfidence < 0 || identity.depthConfidence > 1 ||

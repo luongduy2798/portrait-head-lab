@@ -36,7 +36,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div id="progress-area" class="progress-area" hidden><div class="progress-label"><span id="phase">Đang chuẩn bị…</span><button id="cancel" class="text-button">Hủy</button></div><progress id="progress" max="1" value="0"></progress></div>
         <p id="error" class="error" role="alert" hidden></p>
       </section>
-      <section class="shape-section" aria-labelledby="shape-title"><div class="section-title"><h2 id="shape-title"><span>02</span> Tinh chỉnh hình học</h2><button id="reset-shape" class="text-button" disabled>Khôi phục</button></div><div id="sliders"></div><p class="helper">Giữ hình dáng mặt riêng theo ảnh; sọ, gáy và cổ được tự sinh từ đường viền khuôn mặt. Phần khuất vẫn là ước lượng từ một ảnh.</p></section>
+      <section class="shape-section" aria-labelledby="shape-title"><div class="section-title"><h2 id="shape-title"><span>02</span> Tinh chỉnh hình học</h2><button id="reset-shape" class="text-button" disabled>Khôi phục</button></div><div id="sliders"></div><p class="helper">Giữ hình dáng mặt riêng theo ảnh; sọ, gáy và cổ được tự sinh từ đường viền khuôn mặt. Tai ước lượng theo phần nhìn thấy; có thể chỉnh kích thước, độ cao và độ vểnh. Phần khuất và các nếp trong tai vẫn dùng hình dạng mẫu.</p></section>
       <p class="privacy-note">Ảnh chỉ nằm trong bộ nhớ của tab này, không gửi lên backend. Mesh đầu–cổ được tạo trực tiếp trên thiết bị.</p>
     </aside>
     <div class="main-panel">

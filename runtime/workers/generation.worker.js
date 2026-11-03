@@ -26,7 +26,8 @@
     ["mouthWidth", "\u0110\u1ED9 r\u1ED9ng mi\u1EC7ng"],
     ["lipFullness", "\u0110\u1ED9 d\xE0y m\xF4i"],
     ["earSize", "K\xEDch th\u01B0\u1EDBc tai"],
-    ["earHeight", "\u0110\u1ED9 cao tai"]
+    ["earHeight", "\u0110\u1ED9 cao tai"],
+    ["earOutset", "\u0110\u1ED9 v\u1EC3nh tai"]
   ];
   var clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   var gaussian = (value, center, width) => Math.exp(-(((value - center) / width) ** 2));
@@ -173,7 +174,6 @@
   }
   function faceDetailWeights(template) {
     const features = /* @__PURE__ */ new Set([
-      ...template.boundary,
       ...eyeContours.flatMap(({ upper, lower }) => [...upper, ...lower]),
       1,
       2,
@@ -189,7 +189,8 @@
       326,
       327
     ]);
-    return Array.from({ length: template.canonicalCount }, (_, id) => features.has(id) ? 0.55 : 0.2);
+    const boundary = new Set(template.boundary);
+    return Array.from({ length: template.canonicalCount }, (_, id) => features.has(id) ? 0.55 : boundary.has(id) ? 0.05 : 0.2);
   }
   function fitFaceIdentity(template, analysis, params, expression, camera, landmarkWeights) {
     const base = facePositions(template, params, void 0, expression).map((point) => rotate(point, camera));
@@ -253,6 +254,90 @@
       }));
     }
     return { version: 1, deltas: field.map((delta) => unrotate(delta, camera)), depthConfidence };
+  }
+
+  // src/core/ear-fit.ts
+  function measureVisibleEars(analysis, template, camera) {
+    const { maskWidth: width, maskHeight: height, landmarks, skin, bodySkin, hair, accessories } = analysis;
+    if (width < 2 || height < 2 || skin.length < width * height || Math.abs(camera.ry) > 0.3 || Math.abs(camera.rx) > 0.3) return;
+    const points = landmarks.map(([x, y]) => [x * width, y * height]);
+    const roll = Math.atan2(points[263][1] - points[33][1], points[263][0] - points[33][0]);
+    const cosine = Math.cos(roll), sine = Math.sin(roll);
+    const local = points.map(([x, y]) => [x * cosine + y * sine, -x * sine + y * cosine]);
+    const top = local[10][1], faceHeight = local[152][1] - top;
+    const faceWidth = local[454][0] - local[234][0];
+    if (faceWidth < 80 || faceHeight < 100) return;
+    const outline = template.boundary.map((id) => local[id]);
+    const sample = (mask, x, y) => mask?.[Math.round(y) * width + Math.round(x)] ?? 0;
+    const edgeAt = (y, side) => {
+      const crossings = [];
+      for (let index = 0; index < outline.length; index++) {
+        const a = outline[index], b = outline[(index + 1) % outline.length];
+        if (a[1] <= y && b[1] > y || b[1] <= y && a[1] > y) crossings.push(a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]));
+      }
+      return crossings.length < 2 ? void 0 : side < 0 ? Math.min(...crossings) : Math.max(...crossings);
+    };
+    const ears = {};
+    for (const side of [-1, 1]) {
+      const rows = [];
+      const step = 1 / 120;
+      for (let fraction = 0.18; fraction <= 0.76; fraction += step) {
+        const y = top + faceHeight * fraction, edge = edgeAt(y, side);
+        let extent = 0, gap = 0, clipped = false;
+        if (edge === void 0) {
+          rows.push({ fraction, extent: 0, clipped: true });
+          continue;
+        }
+        for (let distance = 1; distance <= faceWidth * 0.22; distance++) {
+          const x = edge + side * distance;
+          const imageX = x * cosine - y * sine, imageY = x * sine + y * cosine;
+          if (imageX < 2 || imageX >= width - 2 || imageY < 2 || imageY >= height - 2) {
+            clipped = true;
+            break;
+          }
+          const confidence = Math.max(sample(skin, imageX, imageY), sample(bodySkin, imageX, imageY));
+          if (confidence > 0.42 && sample(hair, imageX, imageY) < 0.3 && sample(accessories, imageX, imageY) < 0.3) {
+            extent = distance / faceWidth;
+            gap = 0;
+          } else if (++gap > faceWidth * 0.015) break;
+        }
+        rows.push({ fraction, extent, clipped });
+      }
+      const supported = rows.map((row) => row.extent >= 0.018 && !row.clipped);
+      const runs = [];
+      let run = [];
+      for (let index = 0; index < rows.length; index++) {
+        if (!rows[index].clipped && (supported[index] || supported[index - 1] && supported[index + 1])) run.push(index);
+        else if (run.length) {
+          runs.push(run);
+          run = [];
+        }
+      }
+      if (run.length) runs.push(run);
+      let best, bestArea = 0;
+      for (const indices of runs) {
+        const first = indices[0], last = indices[indices.length - 1];
+        const span = (last - first + 1) * step;
+        const center = (rows[first].fraction + rows[last].fraction) * 0.5;
+        if (first === 0 || last === rows.length - 1 || span < 0.14 || span > 0.44 || center < 0.32 || center > 0.62) continue;
+        if (rows[first - 1].clipped || rows[last + 1].clipped) continue;
+        const extents = indices.map((index) => rows[index].extent).sort((a, b) => a - b);
+        const outset = extents[Math.floor((extents.length - 1) * 0.9)];
+        if (outset < 0.03 || outset > 0.18) continue;
+        const area = extents.reduce((sum, value) => sum + value, 0);
+        if (area <= bestArea) continue;
+        bestArea = area;
+        const pose = 1 - Math.max(Math.abs(camera.ry), Math.abs(camera.rx)) / 0.4;
+        best = {
+          centerFromForehead: center,
+          heightToFace: span,
+          outsetToFace: outset,
+          confidence: clamp(0.8 * pose * Math.min(1, outset / 0.05), 0.2, 0.8)
+        };
+      }
+      if (best) ears[side < 0 ? "left" : "right"] = best;
+    }
+    return ears.left || ears.right ? ears : void 0;
   }
 
   // src/core/fitter.ts
@@ -501,6 +586,7 @@
     const projected = facePositions(template, params, identity, expression).map((point) => project(point, camera));
     const normalizedError = error(projected);
     const measurements = { ...inferred.measurements, ...measureFaceProportions(analysis, template, params, identity) };
+    measurements.ears = measureVisibleEars(analysis, template, camera);
     const warnings = [];
     if (visibleEyes < 0.45) warnings.push("V\xF9ng m\u1EAFt b\u1ECB che ho\u1EB7c \u0111\u01B0\u1EE3c \u0111\xE1nh d\u1EA5u c\xF3 k\xEDnh: gi\u1EEF h\xECnh m\u1EAFt m\u1EABu, c\xF3 th\u1EC3 ch\u1EC9nh \u0111\u1ED9 m\u1EDF/nghi\xEAng m\u1EAFt.");
     if (fitting.filter(({ id }) => landmarkWeights[id] < 0.4).length > 5) warnings.push("\u0110\xE3 gi\u1EA3m \u1EA3nh h\u01B0\u1EDFng c\u1EE7a v\xF9ng c\xF3 t\xF3c/ph\u1EE5 ki\u1EC7n l\xEAn h\xECnh h\u1ECDc; ph\u1EA7n b\u1ECB che d\xF9ng h\xECnh d\u1EA1ng m\u1EABu.");
@@ -656,6 +742,33 @@
   var innerLip = /* @__PURE__ */ new Set([...upperLipRim, ...lowerLipRim]);
   function mouthSurfaceTriangles(triangles) {
     return triangles.filter((triangle) => !triangle.every((id) => innerLip.has(id)));
+  }
+
+  // src/core/jaw.ts
+  function jawTransition(template, positions) {
+    const boundary = template.boundary;
+    const center = boundary.reduce((sum, id) => [
+      sum[0] + template.uv[id][0] / boundary.length,
+      sum[1] + template.uv[id][1] / boundary.length
+    ], [0, 0]);
+    const outerUv = boundary.map((id, index) => {
+      const a = template.uv[boundary[(index + boundary.length - 1) % boundary.length]];
+      const b = template.uv[boundary[(index + 1) % boundary.length]];
+      const uv = template.uv[id];
+      let nx = b[1] - a[1], ny = a[0] - b[0];
+      if (nx * (uv[0] - center[0]) + ny * (uv[1] - center[1]) < 0) {
+        nx *= -1;
+        ny *= -1;
+      }
+      const length = Math.max(1e-6, Math.hypot(nx, ny));
+      return [clamp(uv[0] + nx / length * 0.022, 1e-3, 0.999), clamp(uv[1] + ny / length * 0.022, 1e-3, 0.999)];
+    });
+    const top = positions[2][1], span = Math.max(1, (top - positions[152][1]) * 0.25);
+    const weights = boundary.map((id) => {
+      const t = clamp((top - positions[id][1]) / span, 0, 1);
+      return t * t * (3 - 2 * t);
+    });
+    return { outerUv, weights };
   }
 
   // src/core/appearance.ts
@@ -1346,7 +1459,8 @@
             beardEdgeConfidence
           );
           const projectedAlpha = edgeConfidence * viewConfidence * depthConfidence * sourceConfidence;
-          const beardAlpha = beardEdgeConfidence * viewConfidence * depthConfidence;
+          const beardView = viewConfidence + (1 - viewConfidence) * (1 - oblique);
+          const beardAlpha = beardEdgeConfidence * beardView * depthConfidence;
           alpha = Math.max(projectedAlpha, beardAlpha);
           beardWeight = filledBeardWeight;
         }
@@ -1357,13 +1471,10 @@
         const detailStrength = 0.55 * skinDetailGain * (1 - featureWeight) + featureWeight;
         const relightStrength = 0.5 * (1 - featureWeight);
         const baseColor = [0, 1, 2].map((channel) => skinColors[tri[0]][channel] * a + skinColors[tri[1]][channel] * b + skinColors[tri[2]][channel] * c);
-        const baseLight = luminance(...baseColor);
-        const beardContrast = 1 + beardWeight * 0.85;
-        const beardShade = 1 - beardWeight * 0.18 * (1 - feather(0.78, 0.98, sourceLight / Math.max(baseLight, 5e-3)));
         for (let channel = 0; channel < 3; channel++) {
           const relit = baseColor[channel] * relightStrength + low[channel] * (1 - relightStrength);
           atlas[index + channel] = linearToSrgb(
-            (baseColor[channel] * (1 - alpha) + relit * alpha + (source[channel] - low[channel]) * alpha * detailStrength * beardContrast) * beardShade
+            baseColor[channel] * (1 - alpha) + relit * alpha + (source[channel] - low[channel]) * alpha * detailStrength
           );
         }
         covered[y * size + x] = 1;
@@ -1371,6 +1482,60 @@
       });
     }
     if (painted < size * size * 0.02) throw new Error("V\xF9ng m\u1EB7t d\xF9ng \u0111\u01B0\u1EE3c qu\xE1 \xEDt. H\xE3y ch\u1ECDn \u1EA3nh g\u1EA7n ch\xEDnh di\u1EC7n, kh\xF4ng che m\u1EB7t.");
+    padAtlas(atlas, covered, size);
+    const edgeAtlas = atlas.slice();
+    const jawPositions = facePositions(template, fit.params, fit.identity);
+    const jaw = jawTransition(template, jawPositions);
+    const imageCenter = [
+      (analysis.landmarks[33][0] + analysis.landmarks[263][0]) * width * 0.5,
+      (analysis.landmarks[10][1] + analysis.landmarks[152][1]) * height * 0.5
+    ];
+    const outward = template.boundary.map((id, index) => {
+      const before = analysis.landmarks[template.boundary[(index + template.boundary.length - 1) % template.boundary.length]];
+      const after = analysis.landmarks[template.boundary[(index + 1) % template.boundary.length]];
+      let nx = (after[1] - before[1]) * height, ny = (before[0] - after[0]) * width;
+      const point = analysis.landmarks[id];
+      if (nx * (point[0] * width - imageCenter[0]) + ny * (point[1] * height - imageCenter[1]) < 0) {
+        nx *= -1;
+        ny *= -1;
+      }
+      const length = Math.max(1e-6, Math.hypot(nx, ny));
+      return [nx / length, ny / length];
+    });
+    for (let index = 0; index < template.boundary.length; index++) {
+      const next = (index + 1) % template.boundary.length;
+      if (Math.max(jaw.weights[index], jaw.weights[next]) <= 0) continue;
+      const ids = [template.boundary[index], template.boundary[next]];
+      const inner = ids.map((id) => template.uv[id]);
+      const outer = [jaw.outerUv[index], jaw.outerUv[next]];
+      const colors = ids.map((id) => skinAt(jawPositions[id]));
+      for (const corners of [[0, 1, 2], [1, 3, 2]]) {
+        const uvs = [inner[0], inner[1], outer[0], outer[1]];
+        raster(corners.map((corner) => [uvs[corner][0] * size, (1 - uvs[corner][1]) * size]), size, size, (x, y, a, b, c) => {
+          let along = 0, across = 0;
+          for (const [corner, weight] of [a, b, c].entries()) {
+            along += corners[corner] % 2 * weight;
+            across += (corners[corner] >= 2 ? 1 : 0) * weight;
+          }
+          const u = inner[0][0] * (1 - along) + inner[1][0] * along;
+          const v = inner[0][1] * (1 - along) + inner[1][1] * along;
+          const pa = analysis.landmarks[ids[0]], pb = analysis.landmarks[ids[1]];
+          const px = (pa[0] * (1 - along) + pb[0] * along) * width + (outward[index][0] * (1 - along) + outward[next][0] * along) * eyeDistance * 0.025 * across;
+          const py = (pa[1] * (1 - along) + pb[1] * along) * height + (outward[index][1] * (1 - along) + outward[next][1] * along) * eyeDistance * 0.025 * across;
+          const foreground = px >= 0 && py >= 0 && px < width && py < height ? feather(0.35, 0.7, Math.max(mask(analysis.skin, px, py), mask(analysis.hair, px, py), analysis.bodySkin ? mask(analysis.bodySkin, px, py) : 0)) : 0;
+          const continuation = across * (1 - across) * 2 * foreground;
+          const retention = 1 - feather(0, 1, across);
+          const offset = (y * size + x) * 4;
+          for (let channel = 0; channel < 3; channel++) {
+            const edge = srgbToLinear(bilinear(edgeAtlas, size, size, u * size - 0.5, (1 - v) * size - 0.5, 4, channel));
+            const observed = srgbToLinear(photo(px, py, channel));
+            const base = colors[0][channel] * (1 - along) + colors[1][channel] * along;
+            atlas[offset + channel] = linearToSrgb(base * (1 - retention) + (edge * (1 - continuation) + observed * continuation) * retention);
+          }
+          covered[y * size + x] = 1;
+        });
+      }
+    }
     padAtlas(atlas, covered, size);
     return { atlas, atlasSize: size, scalpSkinMap, scalpSkinMapSize: skinColorMapSize, rearSkinMap, rearSkinMapSize: skinColorMapSize, skinColor, skinDarkColor, skinLightColor, skinSamples, projectedCoverage: painted / (size * size) };
   }

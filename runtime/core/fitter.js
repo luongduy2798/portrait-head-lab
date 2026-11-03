@@ -1,6 +1,7 @@
 import { clamp, deformPoint, project, rotate, shapeControls } from './shape.js';
 import { facePositions, fitFaceIdentity, relativeDepthConfidence } from './identity.js';
 import { eyeVisibility, landmarkVisibility, maskAt } from './visibility.js';
+import { measureVisibleEars } from './ear-fit.js';
 const fittingLandmarks = [10, 21, 54, 67, 103, 109, 127, 162, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323, 454, 356, 389, 251, 284, 332, 297, 338, 33, 133, 159, 145, 263, 362, 386, 374, 70, 63, 105, 66, 107, 336, 296, 334, 293, 300, 1, 2, 4, 5, 6, 98, 327, 168, 195, 61, 291, 0, 17, 13, 14, 78, 308, 50, 280, 101, 330];
 const stableLandmarks = new Set([33, 133, 263, 362, 1, 2, 4, 5, 6, 98, 327, 168, 195]);
 const huber = (residual) => residual < 0.025 ? residual * residual / 2 : 0.025 * (residual - 0.0125);
@@ -278,7 +279,7 @@ export function fitHead(template, anchors, analysis, options = { occludedEyes: f
         }
         for (const [key] of shapeControls) {
             if (key.startsWith('ear'))
-                continue; // Not observable: preserve prior.
+                continue; // No ear landmarks; use visible skin below.
             if (visibleEyes < 0.45 && ['eyeSize', 'eyeOpening', 'eyeTilt'].includes(key))
                 continue;
             optimize(params, key, 0.15 * decay, -1, 1);
@@ -302,6 +303,7 @@ export function fitHead(template, anchors, analysis, options = { occludedEyes: f
     const normalizedError = error(projected);
     // The loft must not apply the same contour correction a second time.
     const measurements = { ...inferred.measurements, ...measureFaceProportions(analysis, template, params, identity) };
+    measurements.ears = measureVisibleEars(analysis, template, camera);
     const warnings = [];
     if (visibleEyes < 0.45)
         warnings.push('Vùng mắt bị che hoặc được đánh dấu có kính: giữ hình mắt mẫu, có thể chỉnh độ mở/nghiêng mắt.');

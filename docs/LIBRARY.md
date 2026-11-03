@@ -71,6 +71,8 @@ Nguồn và giấy phép: [THIRD_PARTY_ASSETS](THIRD_PARTY_ASSETS.md). Việc đ
 
 Dữ liệu `PortraitHeadData` schema 1 có thêm trường tùy chọn `identity` phiên bản 1: 468 vector hiệu chỉnh trung tính theo centimetre canonical và trọng số chiều sâu. Đây là biến dạng đã fit, không phải landmark detector hay pixel nguồn. `portraitHeadData()` sao chép trường này và `restorePortraitHead()` áp dụng lại cùng tham số/texture. Record cũ thiếu trường vẫn dùng đường dựng theo tham số; record có trường sai phiên bản/kích thước/giá trị bị từ chối. Bỏ nếp mí thủ tục áp dụng cả khi dựng lại record cũ. Preview và GLB dùng cùng hình học đã hiệu chỉnh.
 
+`measurements.ears` là trường tùy chọn cho `left`/`right` theo phía trái/phải của ảnh chưa lật (-X/+X của đầu). Mỗi bên chỉ lưu tỷ lệ tâm tai từ trán, chiều cao/phần nhô ra so với mặt và trọng số tin cậy heuristic; không lưu mask hoặc landmark tai. SDK sao chép riêng từng bên khi tạo dữ liệu lưu và dùng lại các tỷ lệ khi restore. Record cũ thiếu trường dùng tỷ lệ mẫu theo đầu; record có giá trị sai kiểu hoặc ngoài khoảng bị từ chối. `earSize`, `earHeight`, `earOutset` điều chỉnh thêm quanh kết quả này. Đường ghép mới áp dụng cả record cũ khi dựng lại; GLB đã bake phải được tạo lại.
+
 Demo ở `demo/` có package/toolchain riêng và dùng các public API cấp thấp
 `HeadPipeline`, `loadTemplate`, `loadEarTemplate`, `loadExpressionRig`, `createHead`,
 shape/expression controls, `exportHead`, `inspectGLB` để giữ công cụ chẩn đoán.

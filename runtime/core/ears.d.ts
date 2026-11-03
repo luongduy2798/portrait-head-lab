@@ -5,5 +5,7 @@ export interface EarTemplate {
     triangles: [number, number, number][];
     rootWeights: number[];
     neighbors: number[][];
+    /** Cartilage support relative to the source head's own attachment skin. */
+    pinnaWeights?: number[];
 }
 export declare function loadEarTemplate(options?: HeadAssetOptions, signal?: AbortSignal): Promise<EarTemplate>;

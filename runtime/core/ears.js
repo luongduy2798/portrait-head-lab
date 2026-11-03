@@ -92,8 +92,38 @@ export async function loadEarTemplate(options = {}, signal) {
                 refinedNeighbors[b].add(a).add(c);
                 refinedNeighbors[c].add(a).add(b);
             }
+            const adjacent = refinedNeighbors.map((neighbors) => [...neighbors]);
+            // Enclose the authored pinna in its lateral plane, including the low
+            // concha inside the rim. Relief-only masks split its folds into islands
+            // and deform alternate strips of the tragus when fitting the skin.
+            const outline = surface.positions.filter(([x], id) => x > 8.5 && surface.skinFade[id] > 0.99)
+                .map(([, y, z]) => [y, z]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+            const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            const chain = (points) => {
+                const hull = [];
+                for (const point of points) {
+                    while (hull.length >= 2 && cross(hull[hull.length - 2], hull[hull.length - 1], point) <= 0)
+                        hull.pop();
+                    hull.push(point);
+                }
+                return hull.slice(0, -1);
+            };
+            const hull = [...chain(outline), ...chain([...outline].reverse())];
+            const pinnaWeights = surface.positions.map(([x, y, z], id) => {
+                let inside = true, distance = Infinity;
+                for (let edge = 0; edge < hull.length; edge++) {
+                    const a = hull[edge], b = hull[(edge + 1) % hull.length];
+                    if (cross(a, b, [y, z]) < -1e-8)
+                        inside = false;
+                    const dy = b[0] - a[0], dz = b[1] - a[1];
+                    const t = THREE.MathUtils.clamp(((y - a[0]) * dy + (z - a[1]) * dz) / Math.max(1e-10, dy * dy + dz * dz), 0, 1);
+                    distance = Math.min(distance, Math.hypot(y - a[0] - t * dy, z - a[1] - t * dz));
+                }
+                return surface.skinFade[id] * THREE.MathUtils.smoothstep(x, 7.5, 7.95)
+                    * (inside ? 1 : 1 - THREE.MathUtils.smoothstep(distance, 0.05, 0.35));
+            });
             return { positions: surface.positions, triangles: surface.triangles, rootWeights: surface.skinFade,
-                neighbors: refinedNeighbors.map((adjacent) => [...adjacent]) };
+                neighbors: adjacent, pinnaWeights };
         }
         finally {
             scene.traverse((object) => {

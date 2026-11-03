@@ -11,9 +11,9 @@ export const shapeControls = [
     ['noseLength', 'Chiều dài mũi'], ['noseBridge', 'Sống mũi'],
     ['noseTip', 'Đầu mũi'], ['mouthWidth', 'Độ rộng miệng'],
     ['lipFullness', 'Độ dày môi'], ['earSize', 'Kích thước tai'],
-    ['earHeight', 'Độ cao tai'],
+    ['earHeight', 'Độ cao tai'], ['earOutset', 'Độ vểnh tai'],
 ];
-export const manualKeys = ['faceWidth', 'cheekFullness', 'jawWidth', 'jawAngle', 'chinLength', 'eyeSpacing', 'eyeOpening', 'eyeTilt', 'browHeight', 'browArch', 'noseWidth', 'noseBridge', 'noseTip', 'mouthWidth', 'lipFullness'];
+export const manualKeys = ['faceWidth', 'cheekFullness', 'jawWidth', 'jawAngle', 'chinLength', 'eyeSpacing', 'eyeOpening', 'eyeTilt', 'browHeight', 'browArch', 'noseWidth', 'noseBridge', 'noseTip', 'mouthWidth', 'lipFullness', 'earSize', 'earHeight', 'earOutset'];
 export const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const gaussian = (value, center, width) => Math.exp(-(((value - center) / width) ** 2));
 const smoothstep = (value) => {

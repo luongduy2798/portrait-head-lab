@@ -30,11 +30,11 @@ export function facePositions(template, params, identity, expression = {}) {
  * refinement. The weights also apply to photo correspondence and morphs. */
 export function faceDetailWeights(template) {
     const features = new Set([
-        ...template.boundary,
         ...eyeContours.flatMap(({ upper, lower }) => [...upper, ...lower]),
         1, 2, 4, 5, 6, 19, 94, 97, 98, 168, 195, 326, 327,
     ]);
-    return Array.from({ length: template.canonicalCount }, (_, id) => features.has(id) ? 0.55 : 0.2);
+    const boundary = new Set(template.boundary);
+    return Array.from({ length: template.canonicalCount }, (_, id) => features.has(id) ? 0.55 : boundary.has(id) ? 0.05 : 0.2);
 }
 /** Fit a regularized displacement field after the coarse pose/shape solve.
  * Smooth the corrections, not the face itself: observed cheek hollows and

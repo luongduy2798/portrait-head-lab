@@ -3,6 +3,7 @@ import { faceDetailWeights, facePositions } from './identity.js';
 import { createSkinField, linearToSrgb, srgbToLinear } from './skin.js';
 import { smoothHeadSurface } from './subdivision.js';
 import { mouthSurfaceTriangles } from './mouth.js';
+import { jawTransition } from './jaw.js';
 import { sampleSkinColor } from './appearance.js';
 import { browContours, eyeContours, outerLip } from './visibility.js';
 import type { Analysis, FitResult, HeadTemplate, Point2, Point3, SkinSample } from './types.js';
@@ -746,7 +747,8 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
         // Beard confidence already contains the face-boundary guard. Do not
         // multiply that same confidence a second time at the UV edge, or the
         // last rows of real chin hair become a translucent skin/beard mix.
-        const beardAlpha = beardEdgeConfidence * viewConfidence * depthConfidence;
+        const beardView = viewConfidence + (1 - viewConfidence) * (1 - oblique);
+        const beardAlpha = beardEdgeConfidence * beardView * depthConfidence;
         alpha = Math.max(projectedAlpha, beardAlpha);
         beardWeight = filledBeardWeight;
       }
@@ -761,10 +763,6 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
       const relightStrength = 0.5 * (1 - featureWeight);
       const baseColor = [0, 1, 2].map((channel) => skinColors[tri[0]][channel] * a
         + skinColors[tri[1]][channel] * b + skinColors[tri[2]][channel] * c) as Point3;
-      const baseLight = luminance(...baseColor);
-      const beardContrast = 1 + beardWeight * 0.85;
-      const beardShade = 1 - beardWeight * 0.18
-        * (1 - feather(0.78, 0.98, sourceLight / Math.max(baseLight, 0.005)));
       for (let channel = 0; channel < 3; channel++) {
         // Nearest-filled photo skin contains streaks from eyelids, hair and
         // segmentation gaps. Only the smooth diffuse field is safe at the seam.
@@ -772,8 +770,8 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
         // after fading its colour base produced black flecks along the seam.
         const relit = baseColor[channel] * relightStrength + low[channel] * (1 - relightStrength);
         atlas[index + channel] = linearToSrgb(
-          (baseColor[channel] * (1 - alpha) + relit * alpha
-            + (source[channel] - low[channel]) * alpha * detailStrength * beardContrast) * beardShade,
+          baseColor[channel] * (1 - alpha) + relit * alpha
+            + (source[channel] - low[channel]) * alpha * detailStrength,
         );
       }
       covered[y * size + x] = 1;
@@ -781,6 +779,61 @@ export function buildTexture(template: HeadTemplate, fit: FitResult, analysis: A
     });
   }
   if (painted < size * size * 0.02) throw new Error('Vùng mặt dùng được quá ít. Hãy chọn ảnh gần chính diện, không che mặt.');
+  padAtlas(atlas, covered, size);
+  // Continue the actual edge over the first, short jaw row. Padding first
+  // makes boundary sampling continuous, even on subpixel UV edges. The outer
+  // edge returns to skin; no beard is tiled onto the unseen throat or neck.
+  const edgeAtlas = atlas.slice();
+  const jawPositions = facePositions(template, fit.params, fit.identity);
+  const jaw = jawTransition(template, jawPositions);
+  const imageCenter: Point2 = [(analysis.landmarks[33][0] + analysis.landmarks[263][0]) * width * 0.5,
+    (analysis.landmarks[10][1] + analysis.landmarks[152][1]) * height * 0.5];
+  const outward = template.boundary.map((id, index): Point2 => {
+    const before = analysis.landmarks[template.boundary[(index + template.boundary.length - 1) % template.boundary.length]];
+    const after = analysis.landmarks[template.boundary[(index + 1) % template.boundary.length]];
+    let nx = (after[1] - before[1]) * height, ny = (before[0] - after[0]) * width;
+    const point = analysis.landmarks[id];
+    if (nx * (point[0] * width - imageCenter[0]) + ny * (point[1] * height - imageCenter[1]) < 0) { nx *= -1; ny *= -1; }
+    const length = Math.max(1e-6, Math.hypot(nx, ny));
+    return [nx / length, ny / length];
+  });
+  for (let index = 0; index < template.boundary.length; index++) {
+    const next = (index + 1) % template.boundary.length;
+    if (Math.max(jaw.weights[index], jaw.weights[next]) <= 0) continue;
+    const ids = [template.boundary[index], template.boundary[next]];
+    const inner = ids.map((id) => template.uv[id]);
+    const outer = [jaw.outerUv[index], jaw.outerUv[next]];
+    const colors = ids.map((id) => skinAt(jawPositions[id]));
+    for (const corners of [[0, 1, 2], [1, 3, 2]]) {
+      const uvs = [inner[0], inner[1], outer[0], outer[1]];
+      raster(corners.map((corner): RasterPoint => [uvs[corner][0] * size, (1 - uvs[corner][1]) * size]), size, size, (x, y, a, b, c) => {
+        let along = 0, across = 0;
+        for (const [corner, weight] of [a, b, c].entries()) {
+          along += (corners[corner] % 2) * weight;
+          across += (corners[corner] >= 2 ? 1 : 0) * weight;
+        }
+        const u = inner[0][0] * (1 - along) + inner[1][0] * along;
+        const v = inner[0][1] * (1 - along) + inner[1][1] * along;
+        const pa = analysis.landmarks[ids[0]], pb = analysis.landmarks[ids[1]];
+        const px = (pa[0] * (1 - along) + pb[0] * along) * width
+          + (outward[index][0] * (1 - along) + outward[next][0] * along) * eyeDistance * 0.025 * across;
+        const py = (pa[1] * (1 - along) + pb[1] * along) * height
+          + (outward[index][1] * (1 - along) + outward[next][1] * along) * eyeDistance * 0.025 * across;
+        const foreground = px >= 0 && py >= 0 && px < width && py < height
+          ? feather(0.35, 0.7, Math.max(mask(analysis.skin, px, py), mask(analysis.hair, px, py), analysis.bodySkin ? mask(analysis.bodySkin, px, py) : 0)) : 0;
+        const continuation = across * (1 - across) * 2 * foreground;
+        const retention = 1 - feather(0, 1, across);
+        const offset = (y * size + x) * 4;
+        for (let channel = 0; channel < 3; channel++) {
+          const edge = srgbToLinear(bilinear(edgeAtlas, size, size, u * size - 0.5, (1 - v) * size - 0.5, 4, channel));
+          const observed = srgbToLinear(photo(px, py, channel));
+          const base = colors[0][channel] * (1 - along) + colors[1][channel] * along;
+          atlas[offset + channel] = linearToSrgb(base * (1 - retention) + (edge * (1 - continuation) + observed * continuation) * retention);
+        }
+        covered[y * size + x] = 1;
+      });
+    }
+  }
   padAtlas(atlas, covered, size);
   return { atlas, atlasSize: size, scalpSkinMap, scalpSkinMapSize: skinColorMapSize, rearSkinMap, rearSkinMapSize: skinColorMapSize, skinColor, skinDarkColor, skinLightColor, skinSamples, projectedCoverage: painted / (size * size) };
 }
