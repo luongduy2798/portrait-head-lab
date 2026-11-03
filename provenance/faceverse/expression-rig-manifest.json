@@ -6,7 +6,6 @@
   "sha256": "803077628044a2a3ec70ed8c69ef5851bb8970765ebbd44e49914b489e33a709",
   "source": {
     "provider": "FaceVerse v4",
-    "sourceUrl": "https://static.moodlab.dev/faceverse/",
     "sourceCommit": "19c67cc4d7234b1ea7d55a185a2cb55fd49bb877",
     "sourceModelSHA256": "077df2658add90ea22ac9675967e38edf56170822c2a7acfe40bda55a9ed3702",
     "files": {

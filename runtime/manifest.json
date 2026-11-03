@@ -1,9 +1,9 @@
 {
-  "packageVersion": "0.2.0",
+  "packageVersion": "1.0.0",
   "assetCount": 19,
-  "assetManifestSHA256": "0e78dbefad6a22441dee43ccd5d198f6adb5f921c9f02f0920365d37c019c8d8",
+  "assetManifestSHA256": "c6fe21bb911ec913a16ac76e3dce58c9596e90872dafb5c61cc45781350a287b",
   "sourceSHA256": {
-    "src/assets.ts": "d0b320d963c4c3c6588a9d97466427c25f15f83129e0f04543835d495aabc333",
+    "src/assets.ts": "e31b95dc9066bfa41ebb81571b8a94dee01920a930b5fc9a0643ef034eecc84e",
     "src/core/appearance.ts": "4ea9681b1e8cd82625ce184e4372c887053361cdfff68f9b4ec625a0e7654b26",
     "src/core/ear-fit.ts": "de3807704f9dfc19b45d01d2631cd9c545eb64db3163d961cb3a3ba30adf0e5b",
     "src/core/ears.ts": "e055ba8f859c9c4fff1f4806973f74706831760e15a19ce8765bc4e81a0d295f",
@@ -14,7 +14,7 @@
     "src/core/fitter.ts": "83d3b5ad707077474549b572ce5a47c3a8d53007b9248765cd934325c2d856a4",
     "src/core/identity.ts": "1e519c03092c2e716d553d63b112ad99b6b1559dba53cc589e05ed8e7c2f62f9",
     "src/core/jaw.ts": "05a5009b4426168a80c238316ea1780b38cd3ce5be0f91260dc60a78a22f472c",
-    "src/core/mesh.ts": "b0ddcf33060d201cd08bfbddff06d329df28b0941023eedf05638fe8eb07b107",
+    "src/core/mesh.ts": "01c4b6a063f5e46d6c5900b03e043144ca1d6fdea9289b2acea9bb7c0cde188f",
     "src/core/mouth.ts": "8bbe9ead8b6c4e06d764e38cfb1762a2d49b2209fd7f71c171baddfa446855e9",
     "src/core/oral-cavity.ts": "8078ce103eacecda4dfa4d9bf1af6ffe3b9d25e0b57295cda74414dc387b16e7",
     "src/core/pipeline.ts": "394cff4da1b0c7dc5293fbec86dd6a2f12ca71a2ddb3ecf36064655d112307ff",
@@ -29,8 +29,8 @@
     "src/errors.ts": "414bb748d6f99d0ae0f2a4c32823c021382f1737414ef1ebea9a9959cf7dc244",
     "src/index.ts": "c33a64da73ce3f052c2f75ca8824cb937c532cc0b49842f4963e5cfebe737562",
     "src/portrait-head.ts": "93cf11869860ea9d30022ce9af374853cf3829c1bd80954bd27169b0d6d5ee42",
-    "src/prepared-assets.ts": "cfaaf194908e0a24ce37b6220698a691974398aec5731971e89219bccb543029",
-    "src/prepared-manifest.ts": "469de61a35d8ac0a24442b1efdd0deb449f5c0b165f6255dd8750943bfd99501",
+    "src/prepared-assets.ts": "9ddad7b9cd875a727a858fd95e1d99377dcedd8cf5890fe472485d33720163d3",
+    "src/prepared-manifest.ts": "becdd5bc93572bfa6f49c52db993fd01cead23a48805ccbb819beed5fc242d92",
     "src/workers/generate.worker.ts": "4cce438750aba6ba0e4ba494698e55ed04e8b2eeb66e0f5346da3c6288c42aa9"
   }
 }

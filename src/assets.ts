@@ -1,5 +1,5 @@
 import config from '../portrait-head.config.js';
-import { preparedAssetInfo, readPreparedAsset } from './prepared-assets.js';
+import { preparedAssetInfo } from './prepared-assets.js';
 import { HeadError } from './errors.js';
 
 /** Optional per-instance override; normal consumers use library-owned defaults. */
@@ -7,7 +7,7 @@ export interface HeadAssetOptions { assetBaseUrl?: string }
 const assets = new Map<string, Promise<string>>();
 let simdSupport: Promise<boolean> | undefined;
 
-/** Both packaged assets and CDN files become verified, same-origin Blob URLs. */
+/** CDN files become verified Blob URLs before being passed to browser workers. */
 export function headAssetURL(options: HeadAssetOptions, path: string): Promise<string> {
   const base = (options.assetBaseUrl ?? config.assetBaseUrl).trim();
   const key = `${base}\n${path}`;
@@ -15,12 +15,10 @@ export function headAssetURL(options: HeadAssetOptions, path: string): Promise<s
   if (!pending) {
     pending = (async () => {
       const asset = preparedAssetInfo(path);
-      let bytes: Uint8Array<ArrayBuffer>;
-      if (base) {
-        const response = await fetch(new URL(path, base.replace(/\/?$/, '/')), { cache: 'force-cache' });
-        if (!response.ok) throw new HeadError('assets');
-        bytes = new Uint8Array(await response.arrayBuffer());
-      } else bytes = await readPreparedAsset(path);
+      if (!base) throw new HeadError('assets');
+      const response = await fetch(new URL(path, base.replace(/\/?$/, '/')), { cache: 'force-cache' });
+      if (!response.ok) throw new HeadError('assets');
+      const bytes = new Uint8Array(await response.arrayBuffer());
       const digest = await crypto.subtle.digest('SHA-256', bytes.buffer);
       const sha256 = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
       if (bytes.byteLength !== asset.bytes || sha256 !== asset.sha256) throw new HeadError('assets');

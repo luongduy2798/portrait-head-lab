@@ -2,7 +2,7 @@
 export interface HeadAssetOptions {
     assetBaseUrl?: string;
 }
-/** Both packaged assets and CDN files become verified, same-origin Blob URLs. */
+/** CDN files become verified Blob URLs before being passed to browser workers. */
 export declare function headAssetURL(options: HeadAssetOptions, path: string): Promise<string>;
 export declare function headWorkerAssets(options: HeadAssetOptions): Promise<{
     bundle: string;

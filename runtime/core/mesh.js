@@ -40,9 +40,9 @@ function fairCranialProfile(profile) {
     }
     return result;
 }
-/** Fair the coarse nape before subdivision. Constraining the face, crown and
- * neck base removes the long loft crease without projecting a finished mesh
- * onto a different surface or expanding the cap vertices. */
+/** Fair the coarse nape before subdivision. Paired smoothing steps retain
+ * the occipital volume instead of pulling the rear silhouette into a line.
+ * The face, crown and neck base remain constrained. */
 function relaxNapeCage(points, triangles, canonicalCount, baseY, scale) {
     const neighbors = points.map(() => new Set());
     for (const [a, b, c] of triangles) {
@@ -60,17 +60,18 @@ function relaxNapeCage(points, triangles, canonicalCount, baseY, scale) {
         return vertical * posterior;
     });
     let positions = points;
-    for (let iteration = 0; iteration < 16; iteration++) {
-        positions = positions.map((point, index) => {
-            if (weights[index] === 0 || neighbors[index].size === 0)
-                return point;
-            const mean = [0, 0, 0];
-            for (const neighbor of neighbors[index])
-                for (let axis = 0; axis < 3; axis++)
-                    mean[axis] += positions[neighbor][axis];
-            return point.map((value, axis) => lerp(value, mean[axis] / neighbors[index].size, 0.35 * weights[index]));
-        });
-    }
+    for (let cycle = 0; cycle < 6; cycle++)
+        for (const factor of [0.35, -0.36]) {
+            positions = positions.map((point, index) => {
+                if (weights[index] === 0 || neighbors[index].size === 0)
+                    return point;
+                const mean = [0, 0, 0];
+                for (const neighbor of neighbors[index])
+                    for (let axis = 0; axis < 3; axis++)
+                        mean[axis] += positions[neighbor][axis];
+                return point.map((value, axis) => lerp(value, mean[axis] / neighbors[index].size, factor * weights[index]));
+            });
+        }
     return positions;
 }
 /** Remove the canonical mouth aperture from the neutral head. Move nearby lip
@@ -215,10 +216,10 @@ function buildNaturalHead(template, params, measurements, includeOralCavity = tr
         [maxY + height * 0.19, foreheadZ - 3.65 * headScale, minY + height * 0.02, chinZ - 1.35 * headScale, 0.96, 0.68],
         [maxY + height * 0.22, -4.9 * headScale, minY + height * 0.045, chinZ - 2.25 * headScale, 0.91, 0.42],
         [maxY + height * 0.20, -6.85 * headScale, minY + height * 0.05, chinZ - 3.1 * headScale, 0.88, 0.20],
-        [maxY + height * 0.06, -9.7 * headScale, minY + height * 0.025, chinZ - 3.7 * headScale, 0.81, 0.05],
-        [maxY - height * 0.20, -10.7 * headScale, minY - height * 0.025, chinZ - 4.0 * headScale, 0.71, 0],
-        [maxY - height * 0.50, -9.35 * headScale, minY - height * 0.08, chinZ - 4.15 * headScale, 0.65, 0],
-        [maxY - height * 0.80, -7.3 * headScale, minY - height * 0.15, chinZ - 4.05 * headScale, 0.61, 0],
+        [maxY + height * 0.08, -10.3 * headScale, minY + height * 0.025, chinZ - 3.7 * headScale, 0.81, 0.05],
+        [maxY - height * 0.18, -11.5 * headScale, minY - height * 0.025, chinZ - 4.0 * headScale, 0.71, 0],
+        [maxY - height * 0.47, -10.1 * headScale, minY - height * 0.08, chinZ - 4.15 * headScale, 0.65, 0],
+        [maxY - height * 0.75, -7.65 * headScale, minY - height * 0.15, chinZ - 4.05 * headScale, 0.61, 0],
         [minY - height * 0.02, -6.75 * headScale, minY - height * 0.21, chinZ - 3.85 * headScale, 0.60, 0],
         [minY - height * 0.15, -6.85 * headScale, minY - height * 0.26, chinZ - 3.5 * headScale, 0.59, 0],
         [minY - height * 0.30, -7.3 * headScale, minY - height * 0.30, chinZ - 3.2 * headScale, 0.60, 0],
@@ -708,19 +709,22 @@ function addEars(group, surface, headNormals, source, params, material, halfWidt
         const { origin } = placement(lateralScale);
         const inset = 0.08 * headScale;
         const native = source.positions.map(([x, y, z]) => [side * (origin + (x - 8.1) * lateralScale), centerY + (y - 1.6) * scale, centerZ + (z + 2.6) * scale]);
-        const fixedSkin = source.rootWeights.map((weight, id) => weight < 0.05 || collarDistance[id] >= 6);
-        let displacement = new Float64Array(native.length * 3);
+        const collarWidth = 10;
+        const fixedSkin = source.rootWeights.map((weight, id) => weight < 0.05 || collarDistance[id] >= collarWidth);
+        const seated = roots.map(({ point }) => [point[0] - side * inset, point[1], point[2]]);
+        const collarBlend = collarDistance.map((distance) => 1 - THREE.MathUtils.smootherstep(distance, 0, collarWidth));
+        let relief = new Float64Array(native.length * 3);
         native.forEach((point, id) => {
-            if (!fixedSkin[id])
+            if (pinna[id] <= 0.8)
                 return;
-            displacement[id * 3] = roots[id].point[0] - side * inset - point[0];
-            displacement[id * 3 + 1] = roots[id].point[1] - point[1];
-            displacement[id * 3 + 2] = roots[id].point[2] - point[2];
+            for (let axis = 0; axis < 3; axis++)
+                relief[id * 3 + axis] = point[axis] - seated[id][axis];
         });
-        let nextDisplacement = displacement.slice();
-        // A harmonic displacement blends the fixed cartilage into the fixed skin
-        // rim. Multiplying positions by local relief masks made the transition
-        // oscillate wherever folds crossed the mask, especially at the tragus.
+        let nextRelief = relief.slice();
+        // Rebuild the collar from the head surface and a harmonic relief field.
+        // Diffusing displacement over the original patch retained its skin folds
+        // as lumps. Only the authored cartilage supplies relief here; the outer
+        // collar fades tangentially below the head, hiding its cut boundary.
         for (let pass = 0; pass < 160; pass++) {
             for (let id = 0; id < native.length; id++) {
                 if (fixedSkin[id] || pinna[id] > 0.8)
@@ -731,33 +735,18 @@ function addEars(group, surface, headNormals, source, params, material, halfWidt
                 for (let axis = 0; axis < 3; axis++) {
                     let mean = 0;
                     for (const neighbor of adjacent)
-                        mean += displacement[neighbor * 3 + axis] / adjacent.length;
-                    nextDisplacement[id * 3 + axis] = mean;
+                        mean += relief[neighbor * 3 + axis] / adjacent.length;
+                    nextRelief[id * 3 + axis] = mean;
                 }
             }
-            [displacement, nextDisplacement] = [nextDisplacement, displacement];
+            [relief, nextRelief] = [nextRelief, relief];
         }
-        let fitted = native.map((point, id) => point.map((value, axis) => value + displacement[id * 3 + axis]));
-        // Fair residual sampling noise in all three axes without progressively
-        // shrinking the helix/lobule. Keep the seated skin fixed in both passes.
-        for (let cycle = 0; cycle < 4; cycle++)
-            for (const factor of [0.45, -0.47]) {
-                const previous = fitted;
-                fitted = previous.map((point, id) => {
-                    if (fixedSkin[id] || !source.neighbors[id].length)
-                        return point;
-                    const mean = [0, 0, 0];
-                    for (const neighbor of source.neighbors[id])
-                        for (let axis = 0; axis < 3; axis++)
-                            mean[axis] += previous[neighbor][axis] / source.neighbors[id].length;
-                    return point.map((value, axis) => lerp(value, mean[axis], factor));
-                });
-            }
-        const positions = fitted.map((point, id) => {
-            const root = sampleHead(side, point[1], point[2]);
-            if (root && pinna[id] > 0.8)
-                point[0] = side * Math.max(side * point[0], side * root.point[0] + 0.025 * headScale);
-            return meters(point);
+        const positions = seated.map((point, id) => {
+            // Keep the affine pinna intact. Placement already clears the head;
+            // per-vertex collision pushes after smoothing reintroduced ridges.
+            if (pinna[id] > 0.8)
+                return meters(native[id]);
+            return meters(point.map((value, axis) => value + relief[id * 3 + axis] * collarBlend[id]));
         });
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions.flat(), 3));
@@ -765,7 +754,7 @@ function addEars(group, surface, headNormals, source, params, material, halfWidt
         computeSmoothNormals(geometry);
         const normals = geometry.getAttribute('normal'), normal = new THREE.Vector3();
         for (let id = 0; id < normals.count; id++) {
-            const skinWeight = Math.max(1 - smoothstep(source.rootWeights[id] / 0.25), smoothstep((collarDistance[id] - 2) / 4));
+            const skinWeight = fixedSkin[id] ? 1 : 1 - collarBlend[id];
             normal.fromBufferAttribute(normals, id).lerp(new THREE.Vector3(...roots[id].normal), skinWeight).normalize();
             normals.setXYZ(id, normal.x, normal.y, normal.z);
         }

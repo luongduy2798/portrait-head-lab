@@ -1,6 +1,6 @@
 {
   "name": "@twa/portrait-head",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "devDependencies": {
@@ -23,7 +23,9 @@
     "runtime/",
     "portrait-head.config.js",
     "portrait-head.config.d.ts",
-    "assets/licenses/",
+    "licenses/",
+    "asset-registry.json",
+    "provenance/",
     "asset-manifest.json",
     "docs/LIBRARY.md",
     "docs/THIRD_PARTY_ASSETS.md"
@@ -32,6 +34,7 @@
   "module": "./runtime/index.js",
   "types": "./runtime/index.d.ts",
   "scripts": {
+    "build": "node tooling/configure-assets.mjs && npm run prepare:runtime",
     "prepare:runtime": "node tooling/prepare-runtime.mjs"
   },
   "sideEffects": false

@@ -2,10 +2,11 @@
 
 ## Luồng xử lý
 
-Core và hai worker ở `src/`, asset ở `assets/` tại root; web demo ở `demo/` và app MoodLab
-cùng import entry JavaScript/typings đã chuẩn bị trong `runtime/` của SDK. SDK tự
-quản lý asset, worker và generate/restore; consumer không cấu hình plugin hoặc
-đường dẫn public. Payload model nén được giải nén/kiểm tra pin rồi đưa qua Blob URL.
+Core và hai worker ở `src/`; model/runtime assets được phục vụ từ CDN theo
+`asset-manifest.json`. Web demo ở `demo/` và app MoodLab cùng import entry
+JavaScript/typings đã chuẩn bị trong `runtime/` của SDK. SDK tự quản lý tải asset,
+worker và generate/restore; consumer không cấu hình plugin hoặc đường dẫn public.
+Payload CDN được kiểm tra byte count/SHA-256 rồi đưa qua Blob URL.
 Luồng dưới mô tả source của demo: canvas crop thủ công được
 giữ nguyên. Với app, `File` được tự căn/xoay và crop trong analysis worker trước
 khi đi qua cùng thuật toán fit/texture/mesh. App tự ghép body và quản lý dữ liệu
@@ -13,13 +14,13 @@ khi đi qua cùng thuật toán fit/texture/mesh. App tự ghép body và quản
 
 `File → createImageBitmap (orientation) → crop canvas 1024 → analysis.worker.js (CPU/WASM) → generate.worker.ts (fit + texture) → Three.js → GLTFExporter → GLTFLoader → download`.
 
-Ảnh chỉ được truyền giữa main thread/worker bằng ImageBitmap hoặc typed array. Template, landmark anchors và model MediaPipe được phục vụ từ repo; mesh đầu–cổ được tạo trực tiếp trong trình duyệt bằng hình học thủ tục. Không có inference API bên ngoài, backend hay analytics. Tai dùng vùng mesh trung tính FaceVerse đã có sẵn local, không chạy FaceVerse inference. Thông số shape chỉ nằm trong GLB được người dùng chủ động tải; ảnh crop/landmark không đi vào báo cáo số đo.
+Ảnh chỉ được truyền giữa main thread/worker bằng ImageBitmap hoặc typed array. Template, landmark anchors và model MediaPipe được tải từ CDN; mesh đầu–cổ được tạo trực tiếp trong trình duyệt bằng hình học thủ tục. Không có inference API bên ngoài, backend hay analytics. Tai dùng vùng mesh trung tính FaceVerse tải từ CDN, không chạy FaceVerse inference. Thông số shape chỉ nằm trong GLB được người dùng chủ động tải; ảnh crop/landmark không đi vào báo cáo số đo.
 
 Ảnh so sánh tối đa 5 bộ giữ trong DOM/RAM. Xóa bằng **Xóa ảnh so sánh** hoặc đóng tab. Khi rời trang, worker/GPU/bitmap được giải phóng và ảnh so sánh/overlay được xóa. Không IndexedDB/localStorage cho ảnh.
 
 ## Template và anchors
 
-`vendor/canonical_face_model.obj` là facial surface 468 đỉnh từ MediaPipe, pin commit trong `vendor/mediapipe-source.json`. Template schema v1 và barycentric anchors đã có sẵn trong `assets/`, không cần generator khi cài hoặc triển khai. Runtime chỉ dùng 468 đỉnh mặt cùng 898 tam giác đầu tiên; các vùng sọ/gáy/cổ được dựng mới bằng loft liền từ đường biên mặt xuống đáy cổ. Profile phía trên đi qua đỉnh sọ, chẩm và gáy; profile phía dưới tạo vùng dưới cằm rồi chuyển xuống cổ trước. Các vòng dùng chung đỉnh và normal, chỉ đóng mặt ở đáy cổ. Không dùng mesh đầu trung bình từ model bên ngoài.
+`vendor/canonical_face_model.obj` là facial surface 468 đỉnh từ MediaPipe, pin commit trong `vendor/mediapipe-source.json`. Template schema v1 và barycentric anchors được tải từ CDN, kiểm tra theo `asset-manifest.json`; không cần generator hoặc bản payload local khi cài/triển khai. Runtime chỉ dùng 468 đỉnh mặt cùng 898 tam giác đầu tiên; các vùng sọ/gáy/cổ được dựng mới bằng loft liền từ đường biên mặt xuống đáy cổ. Profile phía trên đi qua đỉnh sọ, chẩm và gáy; profile phía dưới tạo vùng dưới cằm rồi chuyển xuống cổ trước. Các vòng dùng chung đỉnh và normal, chỉ đóng mặt ở đáy cổ. Không dùng mesh đầu trung bình từ model bên ngoài.
 
 Lưới preview/GLB dùng cage sọ/cổ thưa và ba lượt Loop subdivision trên toàn bộ mặt–sọ–cổ. Với đầu có hiệu chỉnh identity, giảm dịch chuyển các mẫu mặt khi làm mịn, mạnh hơn ở viền mặt, mũi và mi mắt; đỉnh cạnh mới vẫn dùng trọng số Loop để giữ độ cong. Cùng trọng số được áp dụng cho hình học, tọa độ ảnh và các trường morph. Sọ/cổ phía sau tiếp tục dùng Loop thông thường. Normals cộng theo góc ở đỉnh; UV nội suy trong tam giác canonical. Làm mịn vẫn có dịch chuyển so với cage dùng để fit; chưa đo chi phí/kích thước GLB của thay đổi này.
 
@@ -29,7 +30,7 @@ Trước subdivision, vùng gáy được làm mềm trên cage bằng Laplacian
 
 Map lưu **triangle ID + barycentric weights** của từng landmark trên chính surface canonical nguồn, không lấy index từ một mesh không tương ứng. Landmark 468–477 là iris và không được coi là vertex của template 468. Fitter kiểm tra schema, anchor presence và tổng weights. Sọ và gáy dùng các vòng lưới theo đường biên mặt; tai là mesh riêng được ghép vào hai bên sọ. Đây là mesh phục vụ preview/GLB thử nghiệm, chưa phải mesh manifold đã xác minh để in 3D hoặc rigging. Mắt và các chi tiết nhìn thấy được giữ qua surface/texture mặt canonical; chưa có eyeballs/mí rig riêng.
 
-Tai lấy hình học từ mesh FaceVerse v4 trung tính local, qua checksum và một lượt Loop refinement. Runtime giao cắt chính xác theo phương ngang với tam giác của đầu sau subdivision; lưới YZ chỉ dùng chọn tam giác. Vùng vành/hõm được giữ như một khối theo tỷ lệ của ảnh, bao gồm phần hõm thấp nằm trong đường bao vành. Trường dịch chuyển harmonic chỉ nối khối này vào da đầu; ngoài dải chân tai hẹp, điểm được đặt chìm vào surface. Làm mịn hai chiều co/giãn sau ghép giảm gợn mà không cộng dồn co kích thước. Mép cắt giữ chìm khoảng 0,6–0,9 mm tùy tỷ lệ đầu. Toàn bộ tai dùng material đục, cùng hàm màu da/roughness với sọ/cổ. Demo dùng shadow map 2048 và bias theo kích thước texel để giảm vệt bóng tự đổ trên nếp tai; thiết lập ánh sáng này không nằm trong hình học SDK.
+Tai lấy hình học từ mesh FaceVerse v4 trung tính tải từ CDN, qua kiểm tra checksum và một lượt Loop refinement. Runtime giao cắt chính xác theo phương ngang với tam giác của đầu sau subdivision; lưới YZ chỉ dùng chọn tam giác. Vùng vành/hõm được giữ như một khối theo tỷ lệ của ảnh, bao gồm phần hõm thấp nằm trong đường bao vành. Trường dịch chuyển harmonic chỉ nối khối này vào da đầu; ngoài dải chân tai hẹp, điểm được đặt chìm vào surface. Làm mịn hai chiều co/giãn sau ghép giảm gợn mà không cộng dồn co kích thước. Mép cắt giữ chìm khoảng 0,6–0,9 mm tùy tỷ lệ đầu. Toàn bộ tai dùng material đục, cùng hàm màu da/roughness với sọ/cổ. Demo dùng shadow map 2048 và bias theo kích thước texel để giảm vệt bóng tự đổ trên nếp tai; thiết lập ánh sáng này không nằm trong hình học SDK.
 
 Với ảnh gần chính diện, mask da mặt/da cơ thể ngoài đường viền mặt được quét sau khử roll, loại tóc/phụ kiện, đoạn quá nhỏ, không có hai đầu hoặc chạm biên crop. Mỗi bên giữ tỷ lệ tâm, chiều cao và phần nhô nhìn thấy; mức ảnh hưởng giảm theo pose. Số đo được trộn với tỷ lệ mẫu và lưu ở `measurements.ears`. Đây là heuristic phần nhìn thấy, chưa khôi phục nếp/hõm tai hoặc phần bị che; tai vẫn là mesh riêng giao với đầu, chưa boolean union/manifold. Xem [đối chiếu cằm/râu/tai](VALIDATION_CHIN_EAR_2026-11-03.md).
 
@@ -67,11 +68,11 @@ Natural giữ shape fit; Cartoon tăng mắt/má nhẹ và giảm mũi, đổi r
 
 ## Sáu biểu cảm hiển thị
 
-Unbothered, Locked in, Cracking up, Full panic, Big winner và Spectacular flop dùng đúng hệ số FaceVerse từ worker mobile. Sáu trường dịch chuyển tại 468 landmark đã trích từ basis đã pin và lưu sẵn trong `assets/faceverse/expression-rig.json`; runtime không chạy ResNet/FaceVerse inference. Delta được chuyển bằng khung affine cục bộ trên one-ring canonical sang cage đã fit identity, có ràng buộc pháp tuyến và fallback căn tương đồng khi suy biến; sau đó chia nhỏ cùng topology với đầu trung tính. Chuyển động hàm lan giảm dần vào ba vòng cổ sát mặt. Hình học sọ và tham số identity vẫn thuộc pipeline hiện tại.
+Unbothered, Locked in, Cracking up, Full panic, Big winner và Spectacular flop dùng đúng hệ số FaceVerse từ worker mobile. Sáu trường dịch chuyển tại 468 landmark được tải từ `faceverse/expression-rig.json` trên CDN; provenance và checksum được giữ tại `provenance/faceverse/expression-rig-manifest.json`. Runtime không chạy ResNet/FaceVerse inference. Delta được chuyển bằng khung affine cục bộ trên one-ring canonical sang cage đã fit identity, có ràng buộc pháp tuyến và fallback căn tương đồng khi suy biến; sau đó chia nhỏ cùng topology với đầu trung tính. Chuyển động hàm lan giảm dần vào ba vòng cổ sát mặt. Hình học sọ và tham số identity vẫn thuộc pipeline hiện tại.
 
 Mức độ 0–100% tương ứng trọng số 0–2 như mobile; Unbothered là pose nghỉ, nút Trung tính đặt mọi weights về 0. Thay đổi mức độ chỉ cập nhật morph influences. Đổi hình học/style dựng lại targets nhưng giữ lựa chọn hiện tại; dựng từ ảnh mới trở về trung tính. Bounds culling bao cả mức 2×, không dùng làm số đo hình dạng ở pose hiện tại.
 
-18 tam giác lấp bên trong viền môi canonical được bỏ khỏi cage hiển thị và cage bake atlas, giữ template/anchors fitter nguyên vẹn. Đường viền môi được truyền qua các lượt subdivision để dựng thành khoang miệng và mặt phía sau. Ba phần răng trên, răng dưới, lưỡi lấy từ FaceVerse và đặt theo cùng khung miệng trung tính (khóe môi, tâm môi, trục mũi–cằm); cùng phép biến đổi áp dụng lên mọi morph. Bước dựng geometry điều chỉnh độ lùi phần miệng bằng skin projection tại neutral và các mức 25/50/75/100% của từng preset; không thực hiện trong render loop. Các phần có position/normal morph và màu riêng, được xuất cùng đầu. Đây vẫn chưa phải muscle/skeleton rig. Texture vẫn chứa ánh sáng và biểu cảm ảnh nguồn, kính trong ảnh cũng đi theo surface; kết quả khác mobile do topology và cách texture khác nhau.
+18 tam giác lấp bên trong viền môi canonical được bỏ khỏi cage hiển thị và cage bake atlas, giữ template/anchors fitter nguyên vẹn. Đường viền môi được truyền qua các lượt subdivision để dựng thành khoang miệng và mặt phía sau. Ba phần răng trên, răng dưới, lưỡi lấy từ dữ liệu FaceVerse tải qua CDN cùng expression rig và đặt theo cùng khung miệng trung tính (khóe môi, tâm môi, trục mũi–cằm); cùng phép biến đổi áp dụng lên mọi morph. Bước dựng geometry điều chỉnh độ lùi phần miệng bằng skin projection tại neutral và các mức 25/50/75/100% của từng preset; không thực hiện trong render loop. Các phần có position/normal morph và màu riêng, được xuất cùng đầu. Đây vẫn chưa phải muscle/skeleton rig. Texture vẫn chứa ánh sáng và biểu cảm ảnh nguồn, kính trong ảnh cũng đi theo surface; kết quả khác mobile do topology và cách texture khác nhau.
 
 GLB giữ position/normal morph targets, tên và weights hiện tại, cùng `expressionSet` và `{ name, strength }` với strength là mức UI 0–1, tách khỏi trọng số 0–2. Khi mở lại file, metadata được ưu tiên để giữ cả lựa chọn Unbothered ở mức 0; nếu thiếu metadata thì suy ra từ weights theo đúng hệ số của bộ target. Bộ sáu cảm xúc cũ được nhận diện riêng và dùng hệ số 1, không đổi tên sang preset mobile; GLB không đủ bộ target thì khóa nút. Kiểm tra bounds xuất/mở lại dùng vị trí đỉnh ở pose hiện tại, tránh so bounds bao mọi target giữa các material primitives khác nhau.
 

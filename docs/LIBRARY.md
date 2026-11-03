@@ -1,8 +1,9 @@
 # @twa/portrait-head
 
-SDK trình duyệt cung cấp JavaScript ESM và typings đã chuẩn bị tại `runtime/`.
-Runtime chỉ dùng peer `three@0.186.1`. App không cần compiler của thư viện, plugin
-Vite, biến môi trường CDN, public asset path hoặc bước chuẩn bị model.
+SDK trình duyệt cung cấp JavaScript ESM và typings đã chuẩn bị tại runtime/.
+Runtime chỉ dùng peer three@0.186.1; payload model/runtime được tải từ CDN của
+thư viện. App không cần compiler, plugin Vite, biến môi trường CDN, public asset
+path hoặc bước chuẩn bị model.
 
 ## Cài và dùng
 
@@ -47,22 +48,24 @@ tài khoản, thumbnail và luồng Save/backend vẫn do app quản lý.
 
 ## Asset, worker và CDN
 
-Mặc định SDK dùng 19 payload model/runtime đã pin trong package, nạp khi cần,
-giải nén gzip bằng fflate từ Three.js, kiểm tra SHA-256/byte count rồi tạo Blob URL.
-Worker JavaScript đã đóng gói cùng SDK và được tạo bằng Blob. Không yêu cầu host
-transpile TypeScript, bundle Worker entry hay phục vụ một thư mục public riêng.
-Các bundler ngoài Vite chưa được kiểm chứng thực tế; SDK không có Vite dependency.
+SDK tải 19 payload model/runtime đã pin từ CDN theo base URL trong
+portrait-head.config.js, kiểm tra SHA-256/byte count rồi tạo Blob URL. Package
+chỉ chứa JavaScript, typings, worker và metadata; không chứa bản local của model,
+WASM, template hoặc GLB và không có fallback local. Nếu CDN lỗi hoặc checksum
+không khớp, SDK trả HeadError('assets'). Worker JavaScript được tạo bằng Blob.
+Không yêu cầu host transpile TypeScript, bundle Worker entry hay phục vụ một thư
+mục public riêng. Các bundler ngoài Vite chưa được kiểm chứng thực tế.
 
-Cấu hình CDN thuộc **`portrait-head.config.js` ở root thư viện**. Để trống
-`assetBaseUrl` dùng payload đóng gói. Khi có CDN, upload bản raw từ `assets/` của
-repo, giữ cấu trúc và đặt URL thư mục có phiên bản vào file cấu hình thư viện.
-Không cần biến `ML_PORTRAIT_HEAD_ASSET_BASE_URL` hoặc thay cấu hình trong app.
-`assetBaseUrl` trong constructor chỉ là override nâng cao, không bắt buộc.
+Cấu hình CDN thuộc portrait-head.config.js ở root thư viện, mặc định là
+https://static.moodlab.dev/portrait-head/. Jenkins chọn templates/.env.dev hoặc
+.env.prod; npm run build đọc ML_PORTRAIT_HEAD_ASSET_BASE_URL và sinh file cấu hình.
+Có thể override biến này ở môi trường build hoặc dùng assetBaseUrl trong
+constructor. Không cần cấu hình CDN trong app; runtime không có fallback payload local.
 
-CSP của host cần cho phép `worker-src blob:`, `script-src blob:` và WebAssembly,
-`connect-src blob:`; khi dùng CDN thêm origin CDN vào `connect-src` và bật CORS trên
-CDN. Ảnh/landmark chỉ qua bộ nhớ và worker trên thiết bị, không gửi tới CDN.
-Cache asset dùng chung chỉ giữ model đã pin, không giữ ảnh hay dữ liệu face.
+CSP của host cần cho phép worker-src blob:, script-src blob: và WebAssembly,
+connect-src blob:; thêm origin CDN vào connect-src và bật CORS trên CDN.
+Ảnh/landmark chỉ qua bộ nhớ và worker trên thiết bị, không gửi tới CDN. Cache
+asset dùng chung chỉ giữ model đã pin, không giữ ảnh hay dữ liệu face.
 
 Nguồn và giấy phép: [THIRD_PARTY_ASSETS](THIRD_PARTY_ASSETS.md). Việc đóng gói không
 đổi trạng thái `licenseVerified: false` của dữ liệu FaceVerse.
@@ -81,10 +84,10 @@ chỉ cần `PortraitHeadPipeline` và dữ liệu kết quả.
 
 ## Cập nhật artifact khi phát triển thư viện
 
-Sau khi sửa source hoặc pin asset, maintainer chạy `npm run prepare:runtime` tại
-root. Công cụ dev-only dùng TypeScript/esbuild để chuẩn bị JS/declarations/worker
-và nén asset hiện có; không tải model, inference, kiểm thử, deployment hoặc build
-app/demo. Artifact được giữ sẵn trong repo để consumer không chạy công cụ này.
-Source tooling và demo không nằm trong gói phân phối. Vite chỉ nằm trong demo.
+Sau khi sửa source hoặc manifest checksum, maintainer chạy npm run prepare:runtime
+tại root. Công cụ dev-only dùng TypeScript/esbuild để chuẩn bị JS/declarations/
+worker và metadata; không đọc, tải hoặc nén payload asset, không inference, kiểm
+thử, deployment hoặc build app/demo. Source tooling và demo không nằm trong gói
+phân phối. Vite chỉ nằm trong demo.
 Chưa chạy test, build app/demo, lint, typecheck dự án hoặc browser validation cho
 thay đổi SDK này. Việc tạo artifact không xác nhận khả năng chạy hoặc hiệu năng.

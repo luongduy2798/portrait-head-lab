@@ -4,35 +4,26 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
 import { build } from 'esbuild';
 import ts from 'typescript';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const sourceRoot = join(root, 'src');
 const outputRoot = join(root, 'runtime');
-const manifest = JSON.parse(await readFile(join(root, 'asset-manifest.json'), 'utf8'));
+const manifestPath = join(root, 'asset-manifest.json');
+const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const mime = {
   '.json': 'application/json', '.js': 'text/javascript', '.wasm': 'application/wasm',
-  '.glb': 'model/gltf-binary', '.txt': 'text/plain',
+  '.glb': 'model/gltf-binary', '.txt': 'text/plain', '.task': 'application/octet-stream',
+  '.tflite': 'application/octet-stream',
 };
-const registry = [];
+const registry = manifest.assets.map((asset) =>
+  `  ${JSON.stringify(asset.path)}: { bytes: ${asset.bytes}, sha256: ${JSON.stringify(asset.sha256)}, mime: ${JSON.stringify(mime[extname(asset.path)] || 'application/octet-stream')} }`,
+);
 
 await rm(outputRoot, { recursive: true, force: true });
-await mkdir(join(outputRoot, 'prepared'), { recursive: true });
 await mkdir(join(outputRoot, 'workers'), { recursive: true });
-for (const asset of manifest.assets) {
-  const bytes = await readFile(join(root, asset.sourceFile));
-  if (bytes.length !== asset.bytes || createHash('sha256').update(bytes).digest('hex') !== asset.sha256) {
-    throw new Error(`Pinned SDK asset does not match: ${asset.path}`);
-  }
-  const name = asset.path.replace(/[^a-z0-9]+/gi, '_');
-  const encoded = gzipSync(bytes, { level: 9 }).toString('base64');
-  await writeFile(join(outputRoot, 'prepared', `${name}.js`), `// Prepared from ${asset.path}; SHA-256 ${asset.sha256}.\nexport default ${JSON.stringify(encoded)};\n`);
-  await writeFile(join(outputRoot, 'prepared', `${name}.d.ts`), 'declare const payload: string;\nexport default payload;\n');
-  registry.push(`  ${JSON.stringify(asset.path)}: { bytes: ${asset.bytes}, sha256: ${JSON.stringify(asset.sha256)}, mime: ${JSON.stringify(mime[extname(asset.path)] || 'application/octet-stream')}, load: () => import('../runtime/prepared/${name}.js') }`);
-}
-await writeFile(join(sourceRoot, 'prepared-manifest.ts'), `// Generated from asset-manifest.json by SDK artifact preparation.\nexport interface PreparedAsset { bytes: number; sha256: string; mime: string; load: () => Promise<{ default: string }> }\nexport const preparedAssetManifest: Record<string, PreparedAsset> = {\n${registry.join(',\n')}\n};\n`);
+await writeFile(join(sourceRoot, 'prepared-manifest.ts'), `// Generated from asset-manifest.json by SDK artifact preparation.\nexport interface PreparedAsset { bytes: number; sha256: string; mime: string }\nexport const preparedAssetManifest: Record<string, PreparedAsset> = {\n${registry.join(',\n')}\n};\n`);
 
 const generation = await build({
   entryPoints: [join(sourceRoot, 'workers/generate.worker.ts')], bundle: true,
@@ -78,7 +69,8 @@ const result = program.emit();
 if (result.emitSkipped) throw new Error('SDK declaration artifacts could not be emitted.');
 await writeFile(join(outputRoot, 'manifest.json'), `${JSON.stringify({
   packageVersion: JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version,
-  assetCount: manifest.assets.length, assetManifestSHA256: createHash('sha256').update(await readFile(join(root, 'asset-manifest.json'))).digest('hex'),
+  assetCount: manifest.assets.length,
+  assetManifestSHA256: createHash('sha256').update(await readFile(manifestPath)).digest('hex'),
   sourceSHA256: Object.fromEntries(await Promise.all(files.map(async (filename) => [relative(root, filename), createHash('sha256').update(await readFile(filename)).digest('hex')]))),
 }, null, 2)}\n`);
-console.log(`Prepared SDK JavaScript, declarations, two workers and ${manifest.assets.length} pinned asset payloads.`);
+console.log(`Prepared SDK JavaScript, declarations, two workers and metadata for ${manifest.assets.length} CDN assets.`);

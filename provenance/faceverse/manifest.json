@@ -2,7 +2,6 @@
   "schemaVersion": 1,
   "source": {
     "provider": "FaceVerse v4",
-    "sourceUrl": "https://static.moodlab.dev/faceverse/",
     "sourceManifestSHA256": "584bcea7cb15bc29c4c1d6fad542efd4ad1ef6da336bbe595f6b5c231bb75514",
     "sourceCommit": "19c67cc4d7234b1ea7d55a185a2cb55fd49bb877",
     "sourceModelSHA256": "077df2658add90ea22ac9675967e38edf56170822c2a7acfe40bda55a9ed3702",
